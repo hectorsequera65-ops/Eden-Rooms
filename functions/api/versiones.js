@@ -26,7 +26,7 @@ export async function onRequestGet({ env }) {
 }
 
 export async function onRequestPost({ request, env }) {
-  if (!env.DB || !env.VERSIONES_API_KEY) return json({ error: 'Servicio no configurado' }, 503);
+  if (!env.DB || !env.VERSIONES_API_KEY) return json({ error: 'Servicio no configurado', falta_db: !Boolean(env.DB), falta_clave: !Boolean(env.VERSIONES_API_KEY) }, 503);
   const received = request.headers.get('X-API-Key') || '';
   const expected = env.VERSIONES_API_KEY;
   const encoder = new TextEncoder();
