@@ -40,7 +40,23 @@ function isLatam(ip){const v=geoCache.get(ip);return !!v&&(latamCountries.has(v.
 const playerCount=r=>Array.isArray(r.players)?r.players.length:0;
 function gameIcon(name){const s=String(name||'').toLowerCase();if(s.includes('mario kart'))return '🏎️';if(s.includes('smash'))return '🥊';if(s.includes('monster hunter'))return '🐉';if(s.includes('pokémon')||s.includes('pokemon')||s.includes('宝可梦'))return '⚡';if(s.includes('mario party'))return '🎲';if(s.includes('animal crossing'))return '🏝️';if(s.includes('zelda'))return '🗡️';return '🎮'}
 function switchIconId(raw){try{const n=BigInt(String(raw||'0'));if(n<=0n||n>0xFFFFFFFFFFFFFFFFn)return '';return n.toString(16).toUpperCase().padStart(16,'0')}catch{return ''}}
-function gameArtwork(room){const fallback=gameIcon(room.preferredGameName);const id=switchIconId(room.preferredGameId);if(!id)return fallback;const url='https://api.nlib.cc/nx/'+id+'/icon/128';return '<img src="'+url+'" alt="Icono de '+esc(room.preferredGameName||'juego')+'" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode('+JSON.stringify(fallback)+'))">'}
+function gameArtwork(room){
+  const name=String(room.preferredGameName||'');
+  const normalized=name.toLowerCase();
+  const known=[
+    [/mario kart 8 deluxe/, '0100152000022000'],
+    [/super mario odyssey/, '0100000000010000'],
+    [/super smash bros/, '01006A800016E000'],
+    [/monster hunter generations ultimate/, '0100770008DD8000'],
+    [/mario party superstars/, '01006FE013472000']
+  ];
+  const matched=known.find(([re])=>re.test(normalized));
+  const id=matched?matched[1]:switchIconId(room.preferredGameId);
+  const fallback=gameIcon(name);
+  if(!id)return fallback;
+  const url='https://api.nlib.cc/nx/'+id+'/icon/128';
+  return '<img src="'+url+'" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.onerror=null;this.remove();this.parentNode.textContent=\'🎮\'">';
+}
 function updateGameOptions(){const sel=$('gameFilter'),previous=sel.value;const games=[...new Set(rooms.map(r=>String(r.preferredGameName||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));sel.innerHTML='<option value="all">Todos los juegos (sala)</option>'+games.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');sel.value=games.includes(previous)?previous:'all';
 const playerSel=$('playerGameFilter'),prev=playerSel.value;const pg=[...new Set(rooms.flatMap(r=>Array.isArray(r.players)?r.players:[]).map(p=>String(p.gameName||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));playerSel.innerHTML='<option value="all">Cualquier juego (jugadores)</option>'+pg.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');playerSel.value=pg.includes(prev)?prev:'all'}
 function syncQuick(){[['quickActive',$('filter').value==='occupied'],['quickOpen',$('filter').value==='open'],['quickLatam',$('regionFilter').value==='latam']].forEach(([id,on])=>$(id).setAttribute('aria-pressed',String(on)))}
