@@ -20,10 +20,10 @@ export async function onRequestGet({request}) {
   const ip=new URL(request.url).searchParams.get('ip')?.trim()||'';
   if(!validIPv4(ip)) return Response.json({error:'IP pública IPv4 inválida'},{status:400});
   const providers=[
-    {name:'ipwho.is',url:'https://ipwho.is/'+ip,parse:d=>d.success!==false&&d.country?{city:d.city,region:d.region,country:d.country}:null},
-    {name:'ipapi.co',url:'https://ipapi.co/'+ip+'/json/',parse:d=>!d.error&&d.country_name?{city:d.city,region:d.region,country:d.country_name}:null},
-    {name:'ip-api.com',url:'http://ip-api.com/json/'+ip+'?fields=status,message,country,regionName,city',parse:d=>d.status==='success'?{city:d.city,region:d.regionName,country:d.country}:null},
-    {name:'ipinfo.io',url:'https://ipinfo.io/'+ip+'/json',parse:d=>d.country&&!d.bogon?{city:d.city,region:d.region,country:d.country}:null}
+    {name:'ipwho.is',url:'https://ipwho.is/'+ip,parse:d=>d.success!==false&&d.country?{city:d.city,region:d.region,country:d.country,country_code:d.country_code}:null},
+    {name:'ipapi.co',url:'https://ipapi.co/'+ip+'/json/',parse:d=>!d.error&&d.country_name?{city:d.city,region:d.region,country:d.country_name,country_code:d.country_code}:null},
+    {name:'ip-api.com',url:'http://ip-api.com/json/'+ip+'?fields=status,message,country,countryCode,regionName,city',parse:d=>d.status==='success'?{city:d.city,region:d.regionName,country:d.country,country_code:d.countryCode}:null},
+    {name:'ipinfo.io',url:'https://ipinfo.io/'+ip+'/json',parse:d=>d.country&&!d.bogon?{city:d.city,region:d.region,country:d.country,country_code:d.country_code}:null}
   ];
   const checks=await Promise.all(providers.map(async p=>{
     const result=await lookup(p.url);
@@ -33,8 +33,8 @@ export async function onRequestGet({request}) {
   }));
   const success=checks.find(c=>c.location);
   if(success){
-    const {city='',region='',country}=success.location;
-    return new Response(JSON.stringify({ip,city,region,country,source:success.name}),{headers:jsonHeaders});
+    const {city='',region='',country,country_code=''}=success.location;
+    return new Response(JSON.stringify({ip,city,region,country,country_code,source:success.name}),{headers:jsonHeaders});
   }
   return Response.json({error:'Ubicación temporalmente no disponible',providers:checks.map(({name,error})=>({name,error}))},{status:503,headers:{'Cache-Control':'no-store'}});
 }
