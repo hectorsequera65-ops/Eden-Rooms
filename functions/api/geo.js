@@ -23,7 +23,7 @@ export async function onRequestGet({request}) {
     {name:'ipwho.is',url:'https://ipwho.is/'+ip,parse:d=>d.success!==false&&d.country?{city:d.city,region:d.region,country:d.country,country_code:d.country_code}:null},
     {name:'ipapi.co',url:'https://ipapi.co/'+ip+'/json/',parse:d=>!d.error&&d.country_name?{city:d.city,region:d.region,country:d.country_name,country_code:d.country_code}:null},
     {name:'ip-api.com',url:'http://ip-api.com/json/'+ip+'?fields=status,message,country,countryCode,regionName,city',parse:d=>d.status==='success'?{city:d.city,region:d.regionName,country:d.country,country_code:d.countryCode}:null},
-    {name:'ipinfo.io',url:'https://ipinfo.io/'+ip+'/json',parse:d=>d.country&&!d.bogon?{city:d.city,region:d.region,country:d.country,country_code:d.country_code}:null}
+    {name:'ipinfo.io',url:'https://ipinfo.io/'+ip+'/json',parse:d=>d.country&&!d.bogon?{city:d.city,region:d.region,country:d.country,country_code:d.country}:null}
   ];
   const checks=await Promise.all(providers.map(async p=>{
     const result=await lookup(p.url);
