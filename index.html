@@ -55,7 +55,7 @@ function gameArtwork(room){
   const fallback=gameIcon(name);
   if(!id)return fallback;
   const url='https://api.nlib.cc/nx/'+id+'/icon/128';
-  return '<img src="'+url+'" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.onerror=null;this.remove();this.parentNode.textContent=\'🎮\'">';
+  return '<img src="'+url+'" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.onerror=null;this.parentNode.textContent=\'🎮\'">';
 }
 function updateGameOptions(){const sel=$('gameFilter'),previous=sel.value;const games=[...new Set(rooms.map(r=>String(r.preferredGameName||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));sel.innerHTML='<option value="all">Todos los juegos (sala)</option>'+games.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');sel.value=games.includes(previous)?previous:'all';
 const playerSel=$('playerGameFilter'),prev=playerSel.value;const pg=[...new Set(rooms.flatMap(r=>Array.isArray(r.players)?r.players:[]).map(p=>String(p.gameName||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));playerSel.innerHTML='<option value="all">Cualquier juego (jugadores)</option>'+pg.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');playerSel.value=pg.includes(prev)?prev:'all'}
