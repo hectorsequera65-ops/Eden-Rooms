@@ -54,7 +54,7 @@ function gameArtwork(room){
   const id=matched?matched[1]:switchIconId(room.preferredGameId);
   const fallback=gameIcon(name);
   if(!id)return fallback;
-  const url='https://api.nlib.cc/nx/'+id+'/icon/128';
+  const url='/api/game-icon?id='+encodeURIComponent(id);
   return '<span aria-hidden="true">'+fallback+'</span><img src="'+url+'" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">';
 }
 function updateGameOptions(){const sel=$('gameFilter'),previous=sel.value;const games=[...new Set(rooms.map(r=>String(r.preferredGameName||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));sel.innerHTML='<option value="all">Todos los juegos (sala)</option>'+games.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');sel.value=games.includes(previous)?previous:'all';
