@@ -112,7 +112,8 @@ function syncQuick(){[['quickActive',$('filter').value==='occupied'],['quickOpen
 // Geolocalización aproximada por IP. Solo consulta servidores visibles y almacena los resultados 24 horas.
 const geoCache=new Map(),geoPending=new Set();let geoObserver=null,geoQueue=[],geoRunning=false;
 try{const saved=JSON.parse(localStorage.getItem('edenGeoCache')||'{}');for(const [ip,v] of Object.entries(saved))if(v&&v.label!=='No disponible'&&(v.countryCode||v.country)&&Date.now()-v.time<86400000)geoCache.set(ip,v)}catch{}
-function geoText(ip){const v=geoCache.get(ip);return v?' · 📍 '+v.label:' · 📍 Ubicación: consultando…'}
+function countryFlag(code){const c=String(code||'').trim().toUpperCase();return /^[A-Z]{2}$/.test(c)?String.fromCodePoint(...[...c].map(ch=>127397+ch.charCodeAt(0))):'📍'}
+function geoText(ip){const v=geoCache.get(ip);if(!v)return ' · 📍 Ubicación: consultando…';const code=v.countryCode||countryNames[String(v.country||'').toLocaleLowerCase().trim()]||'';return ' · '+countryFlag(code)+' '+v.label}
 function showGeo(ip){document.querySelectorAll('[data-geo-ip]').forEach(el=>{if(el.getAttribute('data-geo-ip')===ip)el.textContent=geoText(ip)})}
 let geoActive=0;
 async function processGeoQueue(){
