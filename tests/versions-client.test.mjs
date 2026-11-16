@@ -40,7 +40,7 @@ test('HTML is escaped; stale ENet fields cannot resurrect from the rooms respons
   const html=playerListMarkup([{nickname:'<img src=x onerror=alert(1)>',gameName:'Game <script>',gameVersion:'<b>4</b>'}]);
   assert.ok(!html.includes('<script>'));assert.ok(!html.includes('<img'));assert.ok(html.includes('&lt;b&gt;'));
 });
-test('browser caches for 30s, deduplicates inflight requests and stops using versions at 120s even on errors',async()=>{
+test('browser reuses the full 120s TTL, deduplicates inflight requests and drops expired data on errors',async()=>{
   let clock=now,calls=0,fail=false,release;
   const client=createVersionsClient({now:()=>clock,fetcher:async(url)=>{
     calls++;assert.equal(url,'/api/versiones-sala?id=sala-prueba-20668');
@@ -52,16 +52,17 @@ test('browser caches for 30s, deduplicates inflight requests and stops using ver
   assert.equal(calls,1);release();release=null;await Promise.all([first,second]);
   assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
   clock+=29999;await client.refresh([room]);assert.equal(calls,1);
-  clock+=1;fail=true;await client.refresh([room]);assert.equal(calls,2);
+  clock+=1;await client.refresh([room]);assert.equal(calls,1);
   assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
-  clock=now+120000;assert.equal(client.decorate(room).players[0].gameVersion,undefined);
-  assert.equal(client.nextExpiry(),null);
+  clock=now+120000;fail=true;await client.refresh([room]);assert.equal(calls,2);
+  assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+  assert.equal(client.status(room.versionsRoomId).retry,true);
 });
 test('only registered occupied rooms are fetched; unavailable results are cached without retry storms',async()=>{
   let calls=0;
   const client=createVersionsClient({now:()=>now,fetcher:async()=>{calls++;return Response.json({disponible:false,sala_id:room.versionsRoomId,jugadores:[]});}});
   await client.refresh([{...room,players:[]},{...room,versionsRoomId:undefined}]);assert.equal(calls,0);
-  await client.refresh([room,room]);await client.refresh([room]);assert.equal(calls,1);
+  await client.refresh([room,room]);await client.refresh([room]);assert.equal(calls,2);
   assert.equal(client.decorate(room).players[0].gameVersion,undefined);
 });
 test('upstream numeric 64-bit IDs remain exact before matching',()=>{
@@ -73,4 +74,38 @@ test('upstream numeric 64-bit IDs remain exact before matching',()=>{
   const p=parseLobbyJSON(`{"nickname":"Eden","gameName":"Mario Kart 8 Deluxe","gameId":${numeric}}`);
   assert.equal(mergeVersionPlayers([p],[observation])[0].gameVersion,'4.0.1');
   assert.throws(()=>parseLobbyJSON('{"invalid":}'));
+});
+
+test('on-demand request sends only ID, polls the public status, then reads fresh versions',async()=>{
+  let clock=now,ready=false;const requests=[];
+  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
+    requests.push({url,options});
+    if(url.startsWith('/api/versiones-sala'))return Response.json(ready?snapshot:{disponible:false,sala_id:room.versionsRoomId,jugadores:[]});
+    if(options.method==='POST'){
+      assert.deepEqual(JSON.parse(options.body),{sala_id:room.versionsRoomId});
+      assert.equal(options.headers['X-API-Key'],undefined);assert.equal(options.headers['X-Collector-Key'],undefined);
+      return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000},{status:202});
+    }
+    ready=true;return Response.json({sala_id:room.versionsRoomId,estado:'listo'});
+  }});
+  await Promise.all([client.refresh([room]),client.refresh([room])]);
+  assert.equal(requests.length,2);assert.equal(client.status(room.versionsRoomId).text,'Consultando versiones…');
+  clock+=1999;await client.refresh([room]);assert.equal(requests.length,2);
+  clock+=1;await client.refresh([room]);assert.equal(requests.length,4);
+  assert.equal(client.status(room.versionsRoomId),null);assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
+  assert.ok(requests.every(r=>!r.url.startsWith('/api/collector')));
+});
+test('offline Ubuntu times out at 45s, offers retry and never silently re-enqueues',async()=>{
+  let clock=now,calls=0;
+  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
+    calls++;
+    if(url.startsWith('/api/versiones-sala'))return Response.json({disponible:false,sala_id:room.versionsRoomId});
+    return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000});
+  }});
+  await client.refresh([room]);assert.equal(calls,2);
+  clock+=45000;await client.refresh([room]);assert.equal(calls,2);
+  assert.equal(client.status(room.versionsRoomId).retry,true);
+  assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+  await client.refresh([room]);assert.equal(calls,2);
+  clock+=15000;client.retry(room.versionsRoomId);await client.refresh([room]);assert.equal(calls,4);
 });

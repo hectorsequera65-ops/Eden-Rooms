@@ -1,3 +1,4 @@
+import {snapshotMatchesJob} from '../../lib/enet-snapshot.js';
 const respond = (body, status = 200) => Response.json(body, {
   status,
   headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
@@ -21,6 +22,9 @@ export async function onRequestGet({ request, env }) {
     ).bind(id).first();
 
     if (!row) return respond({ disponible: false, sala_id: id, jugadores: [] });
+    if (env.ENET_JOBS_ENABLED==='true' && !await snapshotMatchesJob(env.DB,id,authorized.direccion,authorized.puerto)) {
+      return respond({disponible:false,sala_id:id,jugadores:[]});
+    }
     const age = Date.now() - Date.parse(row.actualizado_en);
     if (!Number.isFinite(age) || age < -30000 || age >= 120000) {
       return respond({ disponible: false, sala_id: id, jugadores: [] });

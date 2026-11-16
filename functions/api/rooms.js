@@ -10,7 +10,7 @@ export async function onRequestGet({ env } = {}) {
     if (!upstream.ok) return Response.json({ error: 'API de Eden no disponible', status: upstream.status }, { status: 502 });
     const data = parseLobbyJSON(await upstream.text());
     if (!data || !Array.isArray(data.rooms)) return Response.json({ error: 'Formato inesperado' }, { status: 502 });
-    const rooms = await enrichRooms(data.rooms, env?.DB);
+    const rooms = await enrichRooms(data.rooms, env?.DB, Date.now(), env?.ENET_JOBS_ENABLED==='true');
     return Response.json({ rooms }, { headers: { 'Cache-Control': 'public, max-age=5' } });
   } catch (e) {
     return Response.json({ error: 'No se pudo consultar la API de Eden' }, { status: 502 });

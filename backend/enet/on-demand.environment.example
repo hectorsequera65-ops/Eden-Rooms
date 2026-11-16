@@ -1,0 +1,4 @@
+# Preview-only private collector secret, independent of VERSIONES_API_KEY.
+COLLECTOR_API_KEY=REPLACE_WITH_PREVIEW_COLLECTOR_SECRET
+# Administrator-approved IPs; use /32 entries for individual room servers.
+ENET_ALLOWED_CIDRS=69.24.117.72/32

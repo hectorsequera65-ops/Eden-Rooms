@@ -1,5 +1,9 @@
 # Versiones por jugador en Preview
 
+La etapa actual es bajo demanda: ver [ON_DEMAND.md](ON_DEMAND.md). Este documento
+describe la integración visual original; el caché ahora dura 120 s y el polling
+de 2 s solo sigue trabajos pendientes. No activar el temporizador periódico antiguo.
+
 Entorno exclusivo: test/enet-versions-sralcer. Los fetch de la página son relativos
 al origen actual; al abrir el Preview usan su DB=eden-rooms-test-db y nunca
 redirigen a producción. No se cambian tablas, bindings, secretos ni configuraciones

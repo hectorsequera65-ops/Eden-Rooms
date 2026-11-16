@@ -181,3 +181,13 @@ Un HTTP 200 con index.html no confirma que exista ninguna de esas Functions.
 [PREVIEW_VERSIONS.md](PREVIEW_VERSIONS.md) describe asociación por sala/nombre/IP,
 consulta de versiones-sala, caché de 30 s, caducidad de 120 s y verificaciones
 de escritorio/móvil. No se ha activado ningún servicio automático de Ubuntu.
+
+## Consultas bajo demanda (etapa actual)
+
+La propuesta actual reemplaza el sondeo periódico de salas por trabajos de
+Preview, creados al abrir una tarjeta. Ver [ON_DEMAND.md](ON_DEMAND.md) para la
+migración de eden-rooms-test-db, la configuración y comandos de instalación
+sin activar el servicio. El worker reutiliza collector.py y client.c; no expone
+un servidor en Ubuntu. El caché de resultados dura 120 s; se consulta estado
+cada 2 s únicamente mientras se espera un trabajo. El timer anterior queda
+como referencia y no debe ejecutarse junto al nuevo servicio.

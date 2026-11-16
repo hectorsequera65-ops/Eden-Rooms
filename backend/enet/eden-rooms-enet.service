@@ -1,3 +1,4 @@
+# Legacy periodic proposal: superseded by eden-rooms-on-demand.service. Do not run both.
 # Proposal only. Not installed/enabled. Preview host is fixed to avoid production.
 [Unit]
 Description=Eden Rooms ENet Preview collector (one room, one bounded run)

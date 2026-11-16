@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import threading
 import urllib.request
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -30,7 +31,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def safe_detail(value, limit=800):
     text = str(value)
-    for key in ('VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY'):
+    for key in ('VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY'):
         secret = os.environ.get(key)
         if secret:
             text = text.replace(secret, '[REDACTED]')
@@ -40,7 +41,7 @@ def safe_detail(value, limit=800):
     return ' '.join(text.split())[:limit]
 
 
-def api(base, path, payload=None):
+def api(base, path, payload=None, timeout=15):
     body = None if payload is None else json.dumps(payload).encode()
     method = 'GET' if body is None else 'POST'
     headers = {'Accept': 'application/json', 'User-Agent': USER_AGENT}
@@ -52,13 +53,15 @@ def api(base, path, payload=None):
         key = os.environ.get('VERSIONES_API_KEY')
         if key:
             headers['X-API-Key'] = key
-    if body is not None:
+    if path == '/api/collector/jobs':
+        headers['X-Collector-Key'] = os.environ['COLLECTOR_API_KEY']
+    elif body is not None:
         headers.update({'Content-Type': 'application/json',
                         'X-API-Key': os.environ['VERSIONES_API_KEY']})
     req = urllib.request.Request(base + path, data=body, headers=headers)
     opener = urllib.request.build_opener(NoRedirect())
     try:
-        with opener.open(req, timeout=15) as response:
+        with opener.open(req, timeout=timeout) as response:
             try:
                 return json.load(response)
             except (ValueError, UnicodeError) as error:
@@ -114,14 +117,22 @@ class SnapshotPublisher:
         return True
 
 
-def collect(binary, room, duration, emit, nickname="sralcer"):
+def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", nickname):
         raise ValueError("Invalid collector nickname")
     # No shell expansion; one ENet peer; never announce an invented game.
     command = [binary, room['direccion'], str(room['puerto']), '1', str(duration)]
     snapshots_received = 0
+    child_env = {key: value for key, value in os.environ.items()
+                 if key not in ('COLLECTOR_API_KEY', 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY')}
+    child_env['EDEN_ENET_NICKNAME'] = nickname
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          text=True, env={**os.environ, 'EDEN_ENET_NICKNAME': nickname}) as process:
+                          text=True, env=child_env) as process:
+        watchdog = None
+        if hard_timeout is not None:
+            watchdog = threading.Timer(hard_timeout, process.kill)
+            watchdog.daemon = True
+            watchdog.start()
         try:
             for line in process.stdout:
                 if not line.startswith('EDEN_PACKET3 '):
@@ -146,6 +157,8 @@ def collect(binary, room, duration, emit, nickname="sralcer"):
             if not snapshots_received:
                 raise RuntimeError('No valid snapshots received; nothing sent')
         finally:
+            if watchdog is not None:
+                watchdog.cancel()
             if process.poll() is None:
                 process.terminate()
                 try:

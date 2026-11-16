@@ -70,7 +70,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.locator('[data-room-toggle="room.test:20668"]').click();
       assert.equal(requests.length,1,'reopening reuses fresh cached data');
       await page.clock.fastForward(31000);
-      await expect.poll(()=>requests.length).toBe(2);
+      await expect.poll(()=>requests.length).toBe(1);
       await page.clock.fastForward(90000);
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
       await expect(eden).toContainText(mario);
@@ -82,5 +82,64 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     }finally{
       await browser.close();await new Promise(resolve=>server.close(resolve));
     }
+  });
+}
+
+for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
+  test(`On-demand UI (${device}): queue, result without reload, offline timeout and retry`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
+    const {chromium,expect}=await import(process.env.EDEN_PLAYWRIGHT_MODULE);
+    const server=createServer(async(req,res)=>{
+      const path=new URL(req.url,'http://localhost').pathname;
+      if(path!=='/'&&path!=='/assets/player-versions.js'){res.writeHead(404);res.end();return;}
+      res.writeHead(200,{'Content-Type':path.endsWith('.js')?'text/javascript':'text/html; charset=utf-8'});
+      res.end(await readFile(new URL(path.startsWith('/assets/')?path.slice(1):'index.html',root)));
+    });
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const browser=await chromium.launch({headless:true,executablePath:process.env.EDEN_CHROMIUM||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
+    try{
+      const page=await browser.newPage({viewport:{width,height}});const now=Date.now();
+      await page.clock.install({time:new Date(now)});
+      let queued=0,polls=0,ready=false,privateRequests=0;
+      const id='sala-prueba-20668',game='Super Smash Bros. Ultimate';
+      await page.route('**/api/**',async route=>{
+        const request=route.request(),url=new URL(request.url());
+        if(url.pathname.startsWith('/api/collector'))privateRequests++;
+        if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms:[{name:'Preview bajo demanda',address:'69.24.117.72',port:20668,maxPlayers:32,preferredGameName:game,versionsRoomId:id,players:[{nickname:'Eden',gameName:game}]}]}});
+        if(url.pathname==='/api/versiones-sala')return route.fulfill({json:ready?{disponible:true,sala_id:id,consultado_en:new Date(now+4000).toISOString(),jugadores:[{nombre:'Eden',juego:game,title_id:'01006A800016E000',version:'13.0.5'}]}:{disponible:false,sala_id:id,jugadores:[]}});
+        if(url.pathname==='/api/versiones-consultar'){
+          if(request.method()==='POST'){
+            queued++;assert.deepEqual(request.postDataJSON(),{sala_id:id});
+            assert.equal(request.headers().origin,url.origin);
+            assert.equal(request.headers()['x-api-key'],undefined);assert.equal(request.headers()['x-collector-key'],undefined);
+            return route.fulfill({status:202,json:{sala_id:id,estado:'pendiente',espera_ms:45000}});
+          }
+          polls++;if(queued===1&&polls>=2)ready=true;
+          return route.fulfill({json:{sala_id:id,estado:queued===1&&ready?'listo':'consultando',espera_ms:45000}});
+        }
+        if(url.pathname==='/api/geo')return route.fulfill({json:{country:'Uruguay',countryCode:'UY'}});
+        return route.fulfill({status:404,body:''});
+      });
+      await page.goto(`http://127.0.0.1:${server.address().port}/`);
+      await page.locator('[data-room-toggle]').click();
+      await expect(page.locator('.version-request-status')).toContainText('Consultando versiones…');
+      await expect.poll(()=>queued).toBe(1);
+      await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
+      assert.equal(queued,1);
+      await page.clock.fastForward(2000);await expect.poll(()=>polls).toBe(1);
+      await page.clock.fastForward(2000);await expect(page.locator('.room-open .player-version')).toHaveText('Versión 13.0.5');
+      assert.equal(queued,1);assert.equal(privateRequests,0);
+      await page.clock.fastForward(120001);
+      await expect.poll(()=>queued).toBe(2);
+      await expect(page.locator('.room-open .player-version')).toHaveCount(0);
+      await page.clock.fastForward(45001);
+      await expect(page.locator('.version-request-status')).toContainText('No se pudieron consultar las versiones.');
+      const retry=page.getByRole('button',{name:'Reintentar',exact:true});
+      await expect(retry).toBeDisabled();
+      await page.clock.fastForward(15001);await expect(retry).toBeEnabled();
+      assert.equal(queued,2,'offline worker must not cause automatic re-enqueue loops');
+      await retry.click();await expect.poll(()=>queued).toBe(3);
+      assert.equal(privateRequests,0);
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
   });
 }

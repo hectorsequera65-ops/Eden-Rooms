@@ -1,0 +1,25 @@
+# Proposal only: never installed or enabled by the development task.
+[Unit]
+Description=Eden Rooms Preview ENet on-demand worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/eden-rooms-on-demand-preview.env
+WorkingDirectory=/opt/eden-rooms-enet
+ExecStartPre=/usr/bin/test -x /opt/eden-rooms-enet/eden-collector
+ExecStart=/usr/bin/python3 /opt/eden-rooms-enet/job_worker.py --workers 2 --poll-seconds 3
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
