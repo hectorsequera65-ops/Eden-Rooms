@@ -1,0 +1,21 @@
+[Unit]
+Description=Eden Rooms ENet collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/eden-rooms-enet.env
+WorkingDirectory=/opt/eden-rooms-enet
+ExecStart=/usr/bin/python3 /opt/eden-rooms-enet/collector.py --base-url ${EDEN_PAGES_URL} --send
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -18,18 +18,22 @@ export async function onRequestPost({request,env}){
   const when=Date.parse(data.consultado_en);
   if(!Number.isFinite(when)||Math.abs(Date.now()-when)>120000)return json({error:'Datos vencidos'},400);
   if(data.jugadores.some(p=>!p||typeof p!=='object'||Array.isArray(p)))return json({error:'Jugador invalido'},400);
+  if(data.jugadores.some(p=>p.title_id!==undefined&&(typeof p.title_id!=='string'||!/^[0-9a-fA-F]{16}$/.test(p.title_id))))return json({error:'Title ID invalido'},400);
+  if(data.jugadores.some(p=>p.virtual_ip!==undefined&&(typeof p.virtual_ip!=='string'||!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(p.virtual_ip)||p.virtual_ip.split('.').some(n=>Number(n)>255))))return json({error:'IP virtual invalida'},400);
   const players=data.jugadores.map(p=>({
     nombre:String(p.nombre||'').slice(0,80),
     juego:String(p.juego||'').slice(0,160),
-    version:String(p.version||'').slice(0,40)
-  })).filter(p=>p.nombre&&p.nombre!=='EdenRoomsConsulta');
+    version:String(p.version||'').slice(0,40),
+    ...(p.virtual_ip?{virtual_ip:p.virtual_ip}:{}),
+    ...(p.title_id?{title_id:p.title_id.toUpperCase()}:{})
+  })).filter(p=>p.nombre&&p.nombre!==(env.EDEN_ENET_NICKNAME||'sralcer'));
   try{
     const sala=await env.DB.prepare(
       'SELECT a.nombre FROM salas_autorizadas a INNER JOIN salas_endpoints e ON e.sala_id=a.sala_id WHERE a.sala_id=? AND a.autorizada=1 AND e.direccion IS NOT NULL AND e.puerto BETWEEN 1 AND 65535'
     ).bind(id).first();
     if(!sala)return json({error:'Sala publica no autorizada o sin endpoint registrado'},403);
     await env.DB.prepare(
-      'INSERT INTO versiones_salas (sala_id,nombre_sala,jugadores_json,actualizado_en) VALUES (?,?,?,?) ON CONFLICT(sala_id) DO UPDATE SET nombre_sala=excluded.nombre_sala,jugadores_json=excluded.jugadores_json,actualizado_en=excluded.actualizado_en'
+      'INSERT INTO versiones_salas (sala_id,nombre_sala,jugadores_json,actualizado_en) VALUES (?,?,?,?) ON CONFLICT(sala_id) DO UPDATE SET nombre_sala=excluded.nombre_sala,jugadores_json=excluded.jugadores_json,actualizado_en=excluded.actualizado_en WHERE excluded.actualizado_en >= versiones_salas.actualizado_en'
     ).bind(id,String(sala.nombre),JSON.stringify(players),new Date(when).toISOString()).run();
     return json({ok:true,sala_id:id,jugadores:players.length});
   }catch{return json({error:'No se pudieron guardar las versiones'},503)}

@@ -54,7 +54,7 @@ export async function onRequestPost({ request, env }) {
     nombre: String(p.nombre || '').slice(0, 80),
     juego: String(p.juego || '').slice(0, 160),
     version: String(p.version || '').slice(0, 40)
-  })).filter(p => p.nombre && p.nombre !== 'EdenRoomsConsulta');
+  })).filter(p => p.nombre && p.nombre !== (env.EDEN_ENET_NICKNAME || 'sralcer'));
   try {
     await env.DB.prepare(
       'INSERT INTO versiones_salas (sala_id, nombre_sala, jugadores_json, actualizado_en) VALUES (?, ?, ?, ?) ON CONFLICT(sala_id) DO UPDATE SET nombre_sala=excluded.nombre_sala, jugadores_json=excluded.jugadores_json, actualizado_en=excluded.actualizado_en'
