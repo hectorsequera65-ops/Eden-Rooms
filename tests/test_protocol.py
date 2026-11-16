@@ -73,7 +73,7 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collect('unused',{},1,snapshots.append,'')
 
-    def test_nonzero_unknown_metadata_rejected(self):
+    def test_truncated_metadata_length_rejected(self):
         raw=packet([('Ana',[10,0,0,1],'Game','1.0')])
         with self.assertRaises(ValueError):parse_packet3(raw[:-1]+b'\x01')
 

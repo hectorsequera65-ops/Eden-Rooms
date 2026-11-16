@@ -33,13 +33,16 @@ capacidad), uint16 (interpretado como puerto), juego preferido, nombre del
 propietario y cantidad uint32 de jugadores. Los significados de capacidad,
 puerto y propietario se infieren de la captura; no se usan para asociar salas.
 Cada jugador contiene apodo, IPv4 virtual (4 bytes), juego, Title ID uint64,
-versión y 12 bytes cero de metadatos desconocidos.
+versión y tres cadenas con longitud: usuario, nombre visible y URL de avatar.
+Las cadenas vacías ocupan doce ceros; no son un bloque fijo de doce bytes.
 
 El parser consume la cabecera y exactamente la cantidad declarada, exige final
 exacto del paquete y no busca cadenas en offsets arbitrarios. Conserva jugadores
 sin juego o versión y todos los apodos duplicados. Rechaza truncamientos, IPs
-virtuales duplicadas y metadatos no cero. Los últimos 12 bytes podrían ser tres
-campos vacíos, pero no se asume su formato sin una captura que los contenga.
+virtuales duplicadas y longitudes de metadatos inválidas. Los metadatos se
+consumen por longitud, incluso si no están vacíos o no son UTF-8. La cabecera
+se consume como bytes delimitados y sus etiquetas se escapan solo al mostrarlas;
+los campos binarios nunca se convierten en texto. Ver PROTOCOL.md.
 
 Los cuatro paquetes originales se decodificaron completamente: 11 jugadores,
 ocho versiones 1.4.0, una 1.0.0 y dos versiones vacías. Solo cambia el juego
@@ -128,8 +131,10 @@ que no se envíen anuncios de juego. Sin esas variables se omite esa prueba.
 
 Se compiló y probó en Linux Debian con ENet 1.3.18; no se ejecutó en una máquina
 Ubuntu real. No se hicieron conexiones a las salas públicas ni POST remotos.
-Para ampliar variantes faltan capturas con metadatos no vacíos y, para verificar
-identidad común, un ejemplo actual del JSON del lobby.
+La estructura de los tres campos de cuenta se contrastó con una implementación
+pública del protocolo. Sigue siendo útil una captura real de la sala Smash
+reportada para confirmar el campo exacto que causó el error; los nuevos tests
+Smash/Mario Kart son sintéticos, además del fixture real anonimizado existente.
 
 ## Nombre configurable
 
