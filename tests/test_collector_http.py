@@ -86,6 +86,52 @@ class CollectorHTTPTests(unittest.TestCase):
             fetch.assert_called_once_with('https://example.test','/api/autorizaciones')
             connect.assert_not_called()
 
+    def test_validate_send_uses_only_separate_no_write_route_for_selected_room(self):
+        rooms={'salas':[{'id':'eu','autorizada':True,'direccion':'room.test','puerto':6007},{'id':'other','autorizada':True,'direccion':'other.test','puerto':6008}]}
+        snapshot={'sala_id':'eu','jugadores':[]}
+        def collect_one(binary,room,duration,emit,nickname):
+            self.assertEqual(room['id'],'eu')
+            emit(snapshot)
+        with patch.dict(os.environ,{'VERSIONES_API_KEY':'write-secret'}), patch('sys.argv',['collector.py','--base-url','https://example.test','--validate-send','--once','--room-id','eu']), patch('collector.api',side_effect=[rooms,{'validado':True,'escritura':False}]) as fetch, patch('collector.collect',side_effect=collect_one) as connect, patch('sys.stdout',new_callable=io.StringIO):
+            self.assertEqual(main(),0)
+            connect.assert_called_once()
+            self.assertEqual([call.args[1] for call in fetch.call_args_list],['/api/autorizaciones','/api/versiones-validar'])
+
+    def test_validation_never_falls_back_to_real_write_on_bad_reply(self):
+        rooms={'salas':[{'id':'eu','autorizada':True,'direccion':'room.test','puerto':6007}]}
+        def collect_one(binary,room,duration,emit,nickname):emit({'sala_id':'eu','jugadores':[]})
+        with patch.dict(os.environ,{'VERSIONES_API_KEY':'write-secret'}), patch('sys.argv',['collector.py','--base-url','https://example.test','--validate-send','--once']), patch('collector.api',side_effect=[rooms,{'ok':True}]) as fetch, patch('collector.collect',side_effect=collect_one), patch('sys.stderr',new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(),1)
+            self.assertIn('refusing fallback',stderr.getvalue())
+            self.assertNotIn('/api/versiones-multiples',[call.args[1] for call in fetch.call_args_list])
+
+    def test_missing_selected_room_fails_without_enet(self):
+        with patch('sys.argv',['collector.py','--base-url','https://example.test','--room-id','missing','--once']), patch('collector.api',return_value={'salas':[]}), patch('collector.collect') as connect, patch('sys.stderr',new_callable=io.StringIO):
+            self.assertEqual(main(),1)
+            connect.assert_not_called()
+
+    def test_check_auth_is_a_single_read_only_get_with_no_enet_or_authorization_fetch(self):
+        result={'ok':True,'endpoint':'versiones-validar','contrato':1,'modo':'autenticacion','autenticado':True,'escritura':False,'db_configurada':True}
+        with patch.dict(os.environ,{'VERSIONES_API_KEY':'write-secret'}), patch('sys.argv',['collector.py','--base-url','https://example.test','--check-auth']), patch('collector.api',return_value=result) as fetch, patch('collector.collect') as connect, patch('sys.stdout',new_callable=io.StringIO) as stdout:
+            self.assertEqual(main(),0)
+            fetch.assert_called_once_with('https://example.test','/api/versiones-validar')
+            connect.assert_not_called()
+            self.assertEqual(json.loads(stdout.getvalue()),result)
+
+    def test_check_auth_forwards_only_write_key_and_refuses_old_json_contract(self):
+        opener=MagicMock()
+        opener.open.return_value=self.response({'ok':True})
+        with patch.dict(os.environ,{'VERSIONES_API_KEY':'write-secret','AUTORIZACIONES_API_KEY':'read-secret'}), patch('collector.urllib.request.build_opener',return_value=opener):
+            api('https://example.test','/api/versiones-validar')
+        request=opener.open.call_args.args[0]
+        self.assertEqual(request.get_method(),'GET')
+        self.assertEqual(request.get_header('X-api-key'),'write-secret')
+        self.assertIsNone(request.get_header('X-collector-key'))
+        with patch.dict(os.environ,{'VERSIONES_API_KEY':'write-secret'}), patch('sys.argv',['collector.py','--base-url','https://example.test','--check-auth']), patch('collector.api',return_value={'ok':True}) as fetch, patch('sys.stderr',new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(),1)
+            fetch.assert_called_once()
+            self.assertIn('refusing fallback',stderr.getvalue())
+
     def test_once_reports_error_and_returns_failure_without_enet(self):
         with patch('sys.argv',['collector.py','--base-url','https://example.test','--once']), patch('collector.api',side_effect=ApiError('HTTP 403; detail=1010 browser_signature_banned')), patch('collector.collect') as connect, patch('sys.stderr',new_callable=io.StringIO) as stderr:
             self.assertEqual(main(),1)

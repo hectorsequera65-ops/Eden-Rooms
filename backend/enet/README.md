@@ -1,6 +1,6 @@
 # Eden Rooms: recolector Ubuntu y API de Pages
 
-Cambios locales para revisión. No se ha desplegado ni configurado D1 ni se ha
+Cambios en la rama test/enet-versions-sralcer para revisión. No se ha desplegado ni configurado D1 ni se ha
 modificado Docker eden-sala. El diseño y index.html permanecen intactos.
 
 ## Protocolo recuperado
@@ -151,3 +151,17 @@ Consultar [CLOUDFLARE_ACCESS.md](CLOUDFLARE_ACCESS.md) para el diagnóstico de B
 en Pages, la clave de lectura opcional y el plan de revisión de reglas. El
 cliente ahora se identifica como EdenRoomsCollector y ofrece --check-api para
 probar solo la API, sin ENet ni escrituras.
+
+## Antes de activar --send
+
+Seguir [D1_PREFLIGHT.md](D1_PREFLIGHT.md): auditoría SQL de solo lectura, revisión
+de bindings y validación autenticada mediante la nueva ruta versiones-validar.
+--validate-send y --room-id están incluidos en esta rama; requieren la futura
+publicación revisada de esa ruta y no se han activado en producción.
+
+## Métodos de validación y estado de publicación
+
+Ver [ENDPOINTS.md](ENDPOINTS.md). d1601d3 no contiene versiones-validar: los
+cambios posteriores están incluidos en esta rama, pendientes de despliegue Pages. GET valida exclusivamente la clave mediante
+--check-auth; POST valida snapshots mediante --validate-send, sin guardarlos.
+Un HTTP 200 con index.html no confirma que exista ninguna de esas Functions.

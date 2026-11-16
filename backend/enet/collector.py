@@ -48,6 +48,10 @@ def api(base, path, payload=None):
         key = os.environ.get('AUTORIZACIONES_API_KEY')
         if key:
             headers['X-Collector-Key'] = key
+    if body is None and path == '/api/versiones-validar':
+        key = os.environ.get('VERSIONES_API_KEY')
+        if key:
+            headers['X-API-Key'] = key
     if body is not None:
         headers.update({'Content-Type': 'application/json',
                         'X-API-Key': os.environ['VERSIONES_API_KEY']})
@@ -58,7 +62,7 @@ def api(base, path, payload=None):
             try:
                 return json.load(response)
             except (ValueError, UnicodeError) as error:
-                raise ApiError(f'{method} {path}: HTTP {response.status}, invalid JSON response') from error
+                raise ApiError(f'{method} {path}: HTTP {response.status}, invalid JSON response (possibly a missing API endpoint or static HTML fallback)') from error
     except HTTPError as error:
         try:
             raw = error.read(8192).decode('utf-8', errors='replace')
@@ -86,6 +90,7 @@ def collect(binary, room, duration, emit, nickname="sralcer"):
         raise ValueError("Invalid collector nickname")
     # No shell expansion; one ENet peer; never announce an invented game.
     command = [binary, room['direccion'], str(room['puerto']), '1', str(duration)]
+    snapshots_received = 0
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           text=True, env={**os.environ, 'EDEN_ENET_NICKNAME': nickname}) as process:
         try:
@@ -104,10 +109,13 @@ def collect(binary, room, duration, emit, nickname="sralcer"):
                     if len(players) > 32:
                         raise ValueError('API supports at most 32 players')
                     emit(dict(sala_id=room['id'], consultado_en=timestamp, jugadores=players))
+                    snapshots_received += 1
                 except (ValueError, UnicodeError) as error:
                     print(f"Rejected snapshot for {room['id']}: {error}", file=sys.stderr)
             if process.wait() != 0:
                 raise RuntimeError('ENet client failed; no empty snapshot sent')
+            if not snapshots_received:
+                raise RuntimeError('No valid snapshots received; nothing sent')
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -126,11 +134,15 @@ def main():
     parser.add_argument('--interval', type=int, default=30)
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--check-api', action='store_true', help='Check authorization API once, without ENet or writes')
-    parser.add_argument('--send', action='store_true')
+    parser.add_argument('--check-auth', action='store_true', help='Check versions API key once, without ENet or D1 queries/writes')
+    send_mode = parser.add_mutually_exclusive_group()
+    send_mode.add_argument('--send', action='store_true')
+    send_mode.add_argument('--validate-send', action='store_true', help='POST snapshots to validation-only route, without D1 writes')
+    parser.add_argument('--room-id', help='Query only this exact registered room ID')
     parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME', 'sralcer'))
     args = parser.parse_args()
-    if args.check_api and args.send:
-        parser.error("--check-api cannot be combined with --send")
+    if sum((args.check_api, args.check_auth, args.send, args.validate_send)) > 1:
+        parser.error("Choose only one of --check-api, --check-auth, --send, --validate-send")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
         parser.error("Nickname must contain 1-24 letters, digits, underscores or hyphens")
     base = args.base_url.rstrip('/')
@@ -139,11 +151,19 @@ def main():
         parser.error('A clean HTTPS base URL is required')
     if not 1 <= args.duration <= 600 or args.interval < 1:
         parser.error('Invalid duration/interval')
-    if args.send and not os.environ.get('VERSIONES_API_KEY'):
-        parser.error('VERSIONES_API_KEY is required for --send')
+    if (args.send or args.validate_send or args.check_auth) and not os.environ.get('VERSIONES_API_KEY'):
+        parser.error('VERSIONES_API_KEY is required for --send, --validate-send or --check-auth')
     while True:
         failed = False
         try:
+            if args.check_auth:
+                result = api(base, '/api/versiones-validar')
+                if (not isinstance(result, dict) or result.get('endpoint') != 'versiones-validar'
+                    or result.get('contrato') != 1 or result.get('modo') != 'autenticacion'
+                    or result.get('autenticado') is not True or result.get('escritura') is not False):
+                    raise ApiError('Authentication endpoint did not confirm the no-write contract; refusing fallback')
+                print(json.dumps(result), flush=True)
+                return 0
             data = api(base, '/api/autorizaciones')
             if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
                 raise ApiError('GET /api/autorizaciones: unexpected JSON schema (expected salas array)')
@@ -151,12 +171,21 @@ def main():
             if args.check_api:
                 print(json.dumps({'ok': True, 'salas': len(rooms)}))
                 return 0
+            if args.room_id:
+                rooms = [room for room in rooms if room.get('id') == args.room_id]
+                if len(rooms) != 1:
+                    raise ApiError('Selected room ID is missing or ambiguous in authorization list')
             for room in rooms:
                 if not room.get('autorizada') or not room.get('direccion') or not room.get('puerto'):
                     continue
                 try:
                     def emit(snapshot):
-                        if args.send:
+                        if args.validate_send:
+                            result = api(base, '/api/versiones-validar', snapshot)
+                            if not isinstance(result, dict) or result.get('validado') is not True or result.get('escritura') is not False:
+                                raise ApiError('Validation endpoint did not confirm no-write mode; refusing fallback')
+                            print(json.dumps(result), flush=True)
+                        elif args.send:
                             api(base, '/api/versiones-multiples', snapshot)
                         else:
                             print(json.dumps(snapshot, ensure_ascii=False), flush=True)
@@ -166,8 +195,8 @@ def main():
                     print(f"Collection failed for {room['id']}: {type(error).__name__}: {safe_detail(error, 1400)}", file=sys.stderr)
         except Exception as error:
             failed = True
-            print(f'Authorization fetch failed: {type(error).__name__}: {safe_detail(error, 1400)}', file=sys.stderr)
-        if args.once or args.check_api:
+            print(f'{"Versions authentication check failed" if args.check_auth else "Authorization fetch failed"}: {type(error).__name__}: {safe_detail(error, 1400)}', file=sys.stderr)
+        if args.once or args.check_api or args.check_auth:
             return int(failed)
         time.sleep(args.interval)
 
