@@ -70,3 +70,33 @@ test('upsert does not replace newer snapshots; stale data and missing bindings/k
     const missingKey=context();missingKey.env={DB:env.DB};assert.equal((await validate(missingKey)).status,503);
   }finally{sqlite.close();}
 });
+
+test('registered rooms expose their stable version ID even before a snapshot exists',async(t)=>{
+  const {sqlite,env}=setup();
+  try{
+    t.mock.method(globalThis,'fetch',async()=>Response.json({rooms:[{address:'room.example.test',port:6007,players:[{nickname:'Eden',gameName:'Mario Kart 8 Deluxe'}]}]}));
+    const body=await (await roomsAPI({env})).json();
+    assert.equal(body.rooms[0].versionsRoomId,'eu-official');
+    assert.equal(body.rooms[0].players[0].gameVersion,undefined);
+    const result=await roomVersions({env,request:new Request('https://example.test/api/versiones-sala?id=eu-official')});
+    assert.deepEqual(await result.json(),{disponible:false,sala_id:'eu-official',jugadores:[]});
+  }finally{sqlite.close();}
+});
+
+test('SQL and rooms preserve numeric Title IDs and resolve homonyms with virtual IPs',async(t)=>{
+  const {sqlite,env,payload,context}=setup();
+  try{
+    const title='01006A800016E000',game='Super Smash Bros. Ultimate';
+    const players=[{nombre:'Eden',juego:game,version:'13.0.2',title_id:title,virtual_ip:'10.166.1.1'},
+      {nombre:'Eden',juego:game,version:'13.0.5',title_id:title,virtual_ip:'10.166.1.2'}];
+    assert.equal((await ingest(context({...payload,jugadores:players}))).status,200);
+    const id=BigInt('0x'+title).toString();
+    t.mock.method(globalThis,'fetch',async()=>new Response(`{"rooms":[{"address":"room.example.test","port":6007,"players":[{"nickname":"Eden","gameName":"${game}","gameId":${id},"fakeIp":[10,166,1,1]},{"nickname":"Eden","gameName":"${game}","gameId":${id},"fakeIp":"10.166.1.2"}]}]}`));
+    const body=await (await roomsAPI({env})).json();
+    assert.deepEqual(body.rooms[0].players.map(p=>p.gameVersion),['13.0.2','13.0.5']);
+    assert.equal(body.rooms[0].players[0].gameId,id);
+    const data=await (await roomVersions({env,request:new Request('https://example.test/api/versiones-sala?id=eu-official')})).json();
+    assert.deepEqual(data.endpoint,{direccion:'room.example.test',puerto:6007});
+    assert.equal(Date.parse(data.expira_en)-Date.parse(data.consultado_en),120000);
+  }finally{sqlite.close();}
+});

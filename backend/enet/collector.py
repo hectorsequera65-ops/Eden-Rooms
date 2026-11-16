@@ -85,6 +85,35 @@ def api(base, path, payload=None):
         raise ApiError(f'{method} {path}: network error: {safe_detail(error)}') from None
 
 
+class SnapshotPublisher:
+    """Send changes immediately; renew unchanged snapshots at most once per minute."""
+    def __init__(self, base, validate_only=False, transport=None, now=None):
+        self.base = base
+        self.validate_only = validate_only
+        self.transport = transport or api
+        self.now = now or time.monotonic
+        self.sent = {}
+
+    def __call__(self, snapshot):
+        # Packet member ordering is not an actual player/version change.
+        records = sorted(json.dumps(p, sort_keys=True, ensure_ascii=False) for p in snapshot['jugadores'])
+        signature = tuple(records)
+        previous = self.sent.get(snapshot['sala_id'])
+        if previous and previous[0] == signature and self.now() - previous[1] < 60:
+            return False
+        path = '/api/versiones-validar' if self.validate_only else '/api/versiones-multiples'
+        result = self.transport(self.base, path, snapshot)
+        if self.validate_only:
+            if not isinstance(result, dict) or result.get('validado') is not True or result.get('escritura') is not False:
+                raise ApiError('Validation endpoint did not confirm no-write mode; refusing fallback')
+            print(json.dumps(result), flush=True)
+        elif not isinstance(result, dict) or result.get('ok') is not True:
+            raise ApiError('Versions endpoint did not confirm storage')
+        # Failed writes never suppress the next attempt.
+        self.sent[snapshot['sala_id']] = (signature, self.now())
+        return True
+
+
 def collect(binary, room, duration, emit, nickname="sralcer"):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", nickname):
         raise ValueError("Invalid collector nickname")
@@ -143,6 +172,8 @@ def main():
     args = parser.parse_args()
     if sum((args.check_api, args.check_auth, args.send, args.validate_send)) > 1:
         parser.error("Choose only one of --check-api, --check-auth, --send, --validate-send")
+    if args.room_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", args.room_id):
+        parser.error("--room-id must be one nonempty registered room ID")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
         parser.error("Nickname must contain 1-24 letters, digits, underscores or hyphens")
     base = args.base_url.rstrip('/')
@@ -153,6 +184,7 @@ def main():
         parser.error('Invalid duration/interval')
     if (args.send or args.validate_send or args.check_auth) and not os.environ.get('VERSIONES_API_KEY'):
         parser.error('VERSIONES_API_KEY is required for --send, --validate-send or --check-auth')
+    publisher = SnapshotPublisher(base, validate_only=args.validate_send)
     while True:
         failed = False
         try:
@@ -180,13 +212,8 @@ def main():
                     continue
                 try:
                     def emit(snapshot):
-                        if args.validate_send:
-                            result = api(base, '/api/versiones-validar', snapshot)
-                            if not isinstance(result, dict) or result.get('validado') is not True or result.get('escritura') is not False:
-                                raise ApiError('Validation endpoint did not confirm no-write mode; refusing fallback')
-                            print(json.dumps(result), flush=True)
-                        elif args.send:
-                            api(base, '/api/versiones-multiples', snapshot)
+                        if args.validate_send or args.send:
+                            publisher(snapshot)
                         else:
                             print(json.dumps(snapshot, ensure_ascii=False), flush=True)
                     collect(args.client, room, args.duration, emit, args.nickname)

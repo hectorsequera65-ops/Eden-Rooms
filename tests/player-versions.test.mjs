@@ -16,11 +16,11 @@ test('ignores ambiguous names, changed games and explicit versions', () => {
 });
 test('enriches only fresh matching endpoints and tolerates database failure', async () => {
   const now=Date.now(), rooms=[{address:'example.test',port:6007,players:[player]}];
-  const row={direccion:'example.test',puerto:6007,jugadores_json:JSON.stringify([observation]),actualizado_en:new Date(now).toISOString()};
+  const row={sala_id:'example-room',direccion:'example.test',puerto:6007,jugadores_json:JSON.stringify([observation]),actualizado_en:new Date(now).toISOString()};
   const db={prepare:()=>({all:async()=>({results:[row]})})};
   assert.equal((await enrichRooms(rooms,db,now))[0].players[0].gameVersion,'3.0.0');
   row.actualizado_en=new Date(now-120001).toISOString();
-  assert.deepEqual(await enrichRooms(rooms,db,now),rooms);
+  assert.deepEqual(await enrichRooms(rooms,db,now),[{...rooms[0],versionsRoomId:'example-room'}]);
   row.actualizado_en=new Date(now).toISOString();row.direccion='another.test';
   assert.deepEqual(await enrichRooms(rooms,db,now),rooms);
   assert.deepEqual(await enrichRooms(rooms,{prepare(){throw Error('unavailable')}}),rooms);

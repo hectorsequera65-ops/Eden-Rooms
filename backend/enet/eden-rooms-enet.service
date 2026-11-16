@@ -1,21 +1,19 @@
+# Proposal only. Not installed/enabled. Preview host is fixed to avoid production.
 [Unit]
-Description=Eden Rooms ENet collector
+Description=Eden Rooms ENet Preview collector (one room, one bounded run)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 DynamicUser=yes
-EnvironmentFile=/etc/eden-rooms-enet.env
+EnvironmentFile=/etc/eden-rooms-enet-preview.env
 WorkingDirectory=/opt/eden-rooms-enet
-ExecStart=/usr/bin/python3 /opt/eden-rooms-enet/collector.py --base-url ${EDEN_PAGES_URL} --send
-Restart=on-failure
-RestartSec=15
+ExecStartPre=/usr/bin/test -n ${EDEN_ROOM_ID}
+ExecStart=/usr/bin/python3 /opt/eden-rooms-enet/collector.py --base-url https://test-enet-versions-sralcer.eden-rooms.pages.dev --room-id ${EDEN_ROOM_ID} --send --once --duration 15
+TimeoutStartSec=70
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-
-[Install]
-WantedBy=multi-user.target

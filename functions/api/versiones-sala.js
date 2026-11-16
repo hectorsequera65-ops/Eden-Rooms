@@ -12,7 +12,7 @@ export async function onRequestGet({ request, env }) {
 
   try {
     const authorized = await env.DB.prepare(
-      'SELECT nombre FROM salas_autorizadas WHERE sala_id = ? AND autorizada = 1'
+      'SELECT a.nombre,e.direccion,e.puerto FROM salas_autorizadas a INNER JOIN salas_endpoints e ON e.sala_id=a.sala_id WHERE a.sala_id = ? AND a.autorizada = 1'
     ).bind(id).first();
     if (!authorized) return respond({ disponible: false, jugadores: [] }, 404);
 
@@ -20,10 +20,10 @@ export async function onRequestGet({ request, env }) {
       'SELECT nombre_sala, jugadores_json, actualizado_en FROM versiones_salas WHERE sala_id = ?'
     ).bind(id).first();
 
-    if (!row) return respond({ disponible: false, jugadores: [] });
+    if (!row) return respond({ disponible: false, sala_id: id, jugadores: [] });
     const age = Date.now() - Date.parse(row.actualizado_en);
-    if (!Number.isFinite(age) || age < -30000 || age > 120000) {
-      return respond({ disponible: false, jugadores: [] });
+    if (!Number.isFinite(age) || age < -30000 || age >= 120000) {
+      return respond({ disponible: false, sala_id: id, jugadores: [] });
     }
 
     const jugadores = JSON.parse(row.jugadores_json);
@@ -33,6 +33,8 @@ export async function onRequestGet({ request, env }) {
       sala_id: id,
       sala: row.nombre_sala,
       consultado_en: row.actualizado_en,
+      expira_en: new Date(Date.parse(row.actualizado_en) + 120000).toISOString(),
+      endpoint: { direccion: authorized.direccion, puerto: Number(authorized.puerto) },
       jugadores
     });
   } catch {

@@ -1,0 +1,12 @@
+# Proposal only. Do not enable until the Preview run and bindings are reviewed.
+[Unit]
+Description=Refresh one Eden Rooms Preview snapshot before its 120s expiry
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=eden-rooms-enet.service
+
+[Install]
+WantedBy=timers.target

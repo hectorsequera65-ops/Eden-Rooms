@@ -59,8 +59,9 @@ precisión en JavaScript.
 
 La API conserva title_id y virtual_ip en jugadores_json. /api/rooms combina solo
 salas autorizadas por endpoint registrado IP:puerto y snapshots de hasta 120 s.
-Solo asigna gameVersion cuando el apodo aparece una única vez en ambas listas y
-el juego coincide exactamente. Omite homónimos incluso en juegos diferentes.
+Asigna gameVersion por apodo e IP virtual cuando están disponibles y el juego
+coincide exactamente. Sin IP común exige apodos únicos en ambas listas; los
+homónimos ambiguos se omiten.
 Cuando el lobby contiene gameId, exige igualdad con title_id y rechaza números
 que JavaScript no representa exactamente. gameTitleId conserva el título en el
 JSON enriquecido; la IP virtual no se añade al JSON del lobby.
@@ -100,13 +101,17 @@ title_id y virtual_ip. Cada paquete reemplaza la lista; no se acumula por apodo.
 Solo se envía una lista vacía al decodificar un snapshot vacío válido. Fallos de
 red o parseo dejan vencer el registro anterior; no generan listas vacías.
 
-Para systemd, copiar client compilado como /opt/eden-rooms-enet/eden-collector,
-y collector.py y protocol.py en el mismo directorio. Crear
-/etc/eden-rooms-enet.env usando environment.example y protegerlo con modo 600.
-La unidad eden-rooms-enet.service queda como propuesta: no está instalada ni
-habilitada. Dura 20 s por sala y espera 30 s entre rondas; muchas salas pueden
-superar la ventana de frescura. Escalar la concurrencia requiere medir primero
-el volumen y los efectos de los ingresos.
+La propuesta de systemd usa ahora una unidad oneshot y un temporizador, ambos
+SIN INSTALAR ni ACTIVAR. La URL queda fijada al Preview; requiere el archivo
+/etc/eden-rooms-enet-preview.env y EDEN_ROOM_ID explícito. Consulta una sola sala
+durante 15 s y espera 30 s desde el fin antes del próximo intento. No habilitar
+el servicio o temporizador en esta etapa. Ver PREVIEW_VERSIONS.md.
+
+SnapshotPublisher omite POST duplicados dentro de una ejecución, publica cambios
+inmediatamente y renueva datos sin cambios cada 60 s en modo continuo. Cada nueva
+ejecución oneshot publica su primera muestra válida, necesaria para renovar D1.
+El temporizador impide solapar ejecuciones de su propia unidad. No ejecutar a la
+vez el modo continuo y el temporizador sobre la misma sala.
 
 ## Pages / D1
 
@@ -170,3 +175,9 @@ Ver [ENDPOINTS.md](ENDPOINTS.md). d1601d3 no contiene versiones-validar: los
 cambios posteriores están incluidos en esta rama, pendientes de despliegue Pages. GET valida exclusivamente la clave mediante
 --check-auth; POST valida snapshots mediante --validate-send, sin guardarlos.
 Un HTTP 200 con index.html no confirma que exista ninguna de esas Functions.
+
+## Versiones en la interfaz Preview
+
+[PREVIEW_VERSIONS.md](PREVIEW_VERSIONS.md) describe asociación por sala/nombre/IP,
+consulta de versiones-sala, caché de 30 s, caducidad de 120 s y verificaciones
+de escritorio/móvil. No se ha activado ningún servicio automático de Ubuntu.
