@@ -6,7 +6,7 @@ import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 const root=new URL('../',import.meta.url);
 for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
-  test(`Preview UI (${device}): versions, caching, expiry and room isolation`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
+  test(`Preview UI (${device}): persistent versions, query time and room isolation`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
     const {chromium,expect}=await import(process.env.EDEN_PLAYWRIGHT_MODULE);
     const server=createServer(async(req,res)=>{
       try{
@@ -19,8 +19,8 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     const browser=await chromium.launch({headless:true,executablePath:process.env.EDEN_CHROMIUM||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
     try{
-      const page=await browser.newPage({viewport:{width,height}});
-      const now=Date.now(),errors=[],requests=[],openingRequests=[];
+      const page=await browser.newPage({viewport:{width,height},timezoneId:'America/Montevideo'});
+      const now=Date.parse('2026-11-16T17:14:00Z'),errors=[],requests=[],openingRequests=[];
       page.on('pageerror',error=>errors.push(error.message));
       await page.clock.install({time:new Date(now)});
       const mario='Mario Kart 8 Deluxe',smash='Super Smash Bros. Ultimate';
@@ -79,8 +79,13 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect.poll(()=>requests.length).toBe(2);
       assert.equal(openingRequests.length,2);
       await page.clock.fastForward(90000);
-      await expect(page.locator('.room-open .player-version')).toHaveCount(0);
-      await expect(eden).toContainText(mario);
+      await expect(page.locator('.room-open .player-version')).toHaveCount(4);
+      await expect(eden).toContainText('Versión 4.0.1');
+      await expect(page.locator('.version-request-status time')).toHaveText('Versiones consultadas a las 14:14');
+      rooms[0].players=[{nickname:'Nuevo',gameName:smash}];
+      await page.clock.fastForward(8*3600000);
+      await expect(eden).toContainText('Versión 4.0.1');
+      await expect(page.locator('.version-request-status time')).toHaveAttribute('datetime',snapshot.consultado_en);
       assert.equal(openingRequests.length,2,'expiry must never trigger another ENet request');
       await page.locator('[data-room-toggle="other.test:6007"]').click();
       await expect.poll(()=>requests.includes('other')).toBe(true);
@@ -105,7 +110,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     const browser=await chromium.launch({headless:true,executablePath:process.env.EDEN_CHROMIUM||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
     try{
-      const page=await browser.newPage({viewport:{width,height}});const now=Date.now();
+      const page=await browser.newPage({viewport:{width,height},timezoneId:'America/Montevideo'});const now=Date.now();
       await page.clock.install({time:new Date(now)});
       let queued=0,polls=0,ready=false,privateRequests=0;
       const id='sala-prueba-20668',game='Super Smash Bros. Ultimate';
@@ -137,13 +142,14 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       assert.equal(queued,1);assert.equal(privateRequests,0);
       await page.clock.fastForward(600001);
       assert.equal(queued,1,'ten minutes with the card open must not enqueue again');
-      await expect(page.locator('.room-open .player-version')).toHaveCount(0);
-      await expect(page.locator('.version-request-status')).toContainText('Los datos vencieron');
+      await expect(page.locator('.room-open .player-version')).toHaveText('Versión 13.0.5');
+      await expect(page.locator('.version-request-status time')).toContainText('Versiones consultadas a las');
       const nextOpening=page.waitForResponse(response=>response.url().endsWith('/api/versiones-consultar')&&response.request().method()==='POST');
       await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
       const accepted=await nextOpening;await accepted.finished();
       await page.evaluate(()=>document.readyState); // Let the accepted response's JSON microtasks settle before advancing the clock.
       await expect.poll(()=>queued).toBe(2);
+      await expect(page.locator('.room-open .player-version')).toHaveCount(0);
       await page.clock.fastForward(45001);
       await expect(page.locator('.version-request-status')).toContainText('No se pudieron consultar las versiones.');
       await expect(page.locator('.version-request-status')).toContainText('Cerrá y volvé a abrir');

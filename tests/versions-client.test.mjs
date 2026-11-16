@@ -67,8 +67,10 @@ test('only an explicit opening enqueues once; TTL and repeated refreshes never r
   }
   client.abort();await client.refresh([room]);
   assert.equal(requests.length,2,'only opening POST and final snapshot GET are allowed');
-  assert.equal(client.decorate(room).players[0].gameVersion,undefined);
-  assert.ok(client.status(room.versionsRoomId).text.includes('vencieron'));
+  assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
+  assert.equal(client.status(room).consultedAt,snapshot.consultado_en);
+  assert.match(client.status(room).text,/^Versiones consultadas a las \d{2}:\d{2}$/);
+  assert.equal(client.nextExpiry(),null);
 });
 test('closing and reopening enqueues again even with a snapshot younger than 120s',async()=>{
   let clock=now,posts=0;
@@ -96,7 +98,7 @@ test('pending status GETs never enqueue; completion stops all version polling',a
   await client.open(room);await client.refresh([room]);assert.equal(requests.length,1);
   clock+=2000;await client.refresh([room]);assert.equal(requests.length,2);
   ready=true;clock+=2000;await client.refresh([room]);assert.equal(requests.length,4);
-  assert.equal(client.status(room.versionsRoomId),null);
+  assert.equal(client.status(room).consultedAt,snapshot.consultado_en);
   for(let i=0;i<10;i++){clock+=60000;await client.refresh([room]);}
   assert.equal(requests.length,4);assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
   assert.ok(requests.every(r=>!r.url.startsWith('/api/collector')));
@@ -137,4 +139,49 @@ test('unregistered rooms never enqueue; registered empty rooms still query once 
   const client=createVersionsClient({now:()=>now,fetcher:async()=>{calls++;return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000});}});
   await client.open({...room,versionsRoomId:undefined});assert.equal(calls,0);
   await client.open({...room,players:[]});await client.refresh([room]);assert.equal(calls,1);
+});
+
+test('card owns the queried roster for hours despite lobby changes or missing metadata',async()=>{
+  let clock=now,calls=0;
+  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
+    calls++;return Response.json(options.method==='POST'?{sala_id:room.versionsRoomId,estado:'listo'}:snapshot);
+  }});
+  await client.open(room);
+  const queried=client.decorate(room).players;
+  clock+=8*3600000;
+  const refreshed={...room,versionsRoomId:undefined,players:[{nickname:'New player',gameName:'Another game'}]};
+  client.retain([refreshed]);await client.refresh([refreshed]);
+  assert.equal(client.decorate(refreshed).players,queried);
+  assert.ok(playerListMarkup(queried).includes('Versión 4.0.1'));
+  assert.equal(queried[0].gameTitleId,observation.title_id);
+  assert.equal(client.status(refreshed).consultedAt,snapshot.consultado_en);
+  assert.equal(calls,2);
+  assert.equal(client.decorate({...room,versionsRoomId:'another'}).players[0].gameVersion,undefined);
+  assert.equal(client.decorate({...room,address:'another.test'}).players[0].gameVersion,undefined);
+  client.close();assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+  assert.equal(client.status(room),null);
+});
+test('reopening discards the previous display and replaces roster, version and query time',async()=>{
+  let clock=now,resolvePost;
+  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
+    if(options.method==='POST')return new Promise(resolve=>resolvePost=resolve);
+    return Response.json({...snapshot,consultado_en:new Date(clock).toISOString(),jugadores:[{...observation,version:clock===now?'4.0.1':'4.0.2'}]});
+  }});
+  let opening=client.open(room);resolvePost(Response.json({estado:'listo'}));await opening;
+  client.close();clock+=8*3600000;
+  opening=client.open(room);
+  assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+  assert.equal(client.status(room).text,'Consultando versiones…');
+  resolvePost(Response.json({estado:'listo'}));await opening;
+  assert.equal(client.decorate(room).players[0].gameVersion,'4.0.2');
+  assert.equal(client.status(room).consultedAt,new Date(clock).toISOString());
+});
+test('expired, cross-room or wrong endpoint responses cannot become pinned results',async()=>{
+  for(const invalid of [{...snapshot,consultado_en:new Date(now-120000).toISOString()},
+    {...snapshot,sala_id:'other'}, {...snapshot,endpoint:{direccion:'other.test',puerto:20668}}]){
+    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:invalid)});
+    await client.open(room);
+    assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+    assert.match(client.status(room).text,/No se pudieron/);
+  }
 });

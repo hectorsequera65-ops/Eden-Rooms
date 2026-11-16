@@ -189,7 +189,8 @@ Preview, creados al abrir una tarjeta. Ver [ON_DEMAND.md](ON_DEMAND.md) para la
 migración de eden-rooms-test-db, la configuración y comandos de instalación
 sin activar el servicio. El worker reutiliza collector.py y client.c; no expone
 un servidor en Ubuntu. Cada apertura envía un único POST, sin renovación automática mientras siga
-abierta. El TTL de 120 s solo limita la visualización; cerrar/reabrir permite
+abierta. El TTL de 120 s sigue aplicándose en D1/API; una tarjeta abierta conserva su
+copia de jugadores y versiones con la hora original, sin vencimiento visual. Cerrar/reabrir permite
 una consulta nueva. Se consulta estado cada 2 s únicamente mientras se espera
 un trabajo. El timer anterior queda
 como referencia y no debe ejecutarse junto al nuevo servicio.

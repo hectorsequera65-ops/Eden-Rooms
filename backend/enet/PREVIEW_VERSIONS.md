@@ -2,7 +2,8 @@
 
 La etapa actual es estrictamente por apertura: ver [ON_DEMAND.md](ON_DEMAND.md).
 Un POST por apertura; GET de estado solo mientras haya trabajo pendiente. Los
-120 s son caducidad de visualización y no activan trabajo. Una reapertura no está
+120 s siguen aplicándose a D1/API, pero no ocultan una copia ya aceptada por
+una tarjeta abierta. Se muestra la hora original de consulta y no se activa trabajo. Una reapertura no está
 bloqueada por esa caché. No activar el temporizador periódico antiguo.
 
 Entorno exclusivo: test/enet-versions-sralcer. Los fetch de la página son relativos
@@ -47,10 +48,15 @@ Todos los textos se escapan antes de insertarse en el HTML.
 - Cerrar/reabrir permite otra solicitud, incluso con datos de menos de 120 s.
   Si ya hay un trabajo activo de esa sala, Cloudflare lo comparte. Se conservan
   cuotas, cooldown, límites de concurrencia y validación de destinos.
-- A los 120 s se ocultan las versiones vencidas; no se renuevan automáticamente.
+- La tarjeta conserva la lista de jugadores y versiones recibida hasta cerrarse,
+  aunque cambie el lobby o pasen horas. «Versiones consultadas a las HH:mm»
+  identifica la hora original en la zona horaria del visitante. No se renueva.
+- Solo se aceptan respuestas vigentes al recibirlas. D1 y las APIs mantienen
+  los 120 s; cerrar descarta la copia local y reabrir espera un resultado nuevo.
 - Tras error, el mensaje indica cerrar/reabrir. No se reenvía un POST perdido o
   abortado por ocultar la pestaña dentro de la misma apertura.
-- Cambios de juegos, identidades ambiguas y datos vencidos siguen sin enriquecerse.
+- Las identidades ambiguas no reciben versiones; una copia no se reasigna a
+  jugadores nuevos del lobby ni a otra sala.
 
 ## Recolector automático: propuesta, no activada
 
@@ -109,7 +115,8 @@ python3 backend/enet/collector.py \
 6. En Network del navegador comprobar la petición versiones-sala y su ID. Reabrir
    la misma tarjeta realiza otro POST incluso con datos frescos. Mantenerla abierta
    no genera solicitudes ENet periódicas. Al detener el recolector y
-   esperar hasta consultado_en + 120 s, las versiones deben desaparecer.
+   esperar más de 120 s: jugadores, versiones y hora deben permanecer visibles.
+   Al cerrar/reabrir se retiran y se reemplazan al terminar la nueva consulta.
 7. Confirmar que otra sala con el mismo apodo no hereda versiones y que en móvil
    no hay desbordamiento horizontal. Ninguna clave debe estar en solicitudes del
    navegador a versiones-sala.
@@ -121,7 +128,7 @@ fallos de red, caducidad límite, SQL real para POST -> D1 -> lectura de rooms.
 Python: parser binario, publisher, supresión de duplicados, heartbeat, cambio de
 jugadores y reintento tras un POST fallido. ENet de integración solo en loopback.
 Chromium: página real de escritorio y móvil con API fixtures locales; apertura de
-sala, versiones, jugador sin versión, duplicados por IP, caché y retirada a 120 s.
+sala, versiones, jugador sin versión, duplicados por IP, persistencia durante horas, hora de consulta, reapertura y aislamiento de salas.
 No hacen escrituras en D1 remoto ni consultas a salas públicas.
 
 ```sh

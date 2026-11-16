@@ -160,9 +160,10 @@ async function refreshVisibleVersions(){
   await versionsClient.refresh(selected);
 }
 function versionStatusMarkup(room){
-  const state=versionsClient.status(room.versionsRoomId);
+  const state=versionsClient.status(room);
   if(!state)return '';
-  return '<div class="tiny muted version-request-status" role="status" aria-live="polite">'+esc(state.text)+'</div>';
+  const text=state.consultedAt?'<time datetime="'+esc(state.consultedAt)+'" title="'+esc(new Date(state.consultedAt).toLocaleString('es'))+'">'+esc(state.text)+'</time>':esc(state.text);
+  return '<div class="tiny muted version-request-status" role="status" aria-live="polite">'+text+'</div>';
 }
 function scheduleVersionExpiry(){
   clearTimeout(versionExpiryTimer);

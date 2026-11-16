@@ -14,7 +14,7 @@ export function virtualIp(player) {
   return parts.map(Number).join('.');
 }
 export function withoutEnetVersion(player) {
-  if (player.gameVersionSource !== 'enet') return player;
+  if (!['enet','enet-card'].includes(player.gameVersionSource)) return player;
   const result = {...player};
   delete result.gameVersion; delete result.gameTitleId;
   delete result.gameVersionSource; delete result.gameVersionObservedAt;
@@ -79,8 +79,29 @@ export function applyRoomSnapshot(room, snapshot, now = Date.now()) {
   if (snapshot.endpoint && (snapshot.endpoint.direccion !== room.address || Number(snapshot.endpoint.puerto) !== Number(room.port))) return clean;
   return {...clean, players: mergeVersionPlayers(players, snapshot.jugadores, {observedAt: snapshot.consultado_en, now})};
 }
+// Only a freshly accepted API result can become a card-owned display snapshot.
+// Its source tag is local UI state; it is never sent to D1 or trusted by the API.
+function pinSnapshot(snapshot, now) {
+  const observations = snapshot.jugadores.filter(p => p && typeof p.nombre === 'string' && p.nombre
+    && typeof p.juego === 'string');
+  const players = observations.map(p => ({nickname:p.nombre, gameName:p.juego,
+    ...(p.virtual_ip !== undefined ? {virtual_ip:p.virtual_ip} : {})}));
+  return Object.freeze(mergeVersionPlayers(players, observations, {observedAt:snapshot.consultado_en, now})
+    .map(player => Object.freeze(player.gameVersionSource === 'enet' ? {...player, gameVersionSource:'enet-card'} : {...player})));
+}
+function queryTime(timestamp) {
+  return new Intl.DateTimeFormat('es', {hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(new Date(timestamp));
+}
 export function createVersionsClient({fetcher = (...args) => fetch(...args), now = () => Date.now(), timeoutMs = 5000, onChange = () => {}} = {}) {
   const entries = new Map();
+  function entryFor(roomOrId) {
+    if (typeof roomOrId === 'string') return entries.get(roomOrId);
+    if (!roomOrId) return undefined;
+    if (roomIdValid(roomOrId.versionsRoomId)) return entries.get(roomOrId.versionsRoomId);
+    // A temporary D1/lobby metadata failure must not erase a card-owned result.
+    return [...entries.values()].find(entry => entry.open && entry.address === roomOrId.address
+      && entry.port === Number(roomOrId.port));
+  }
   function update(entry, patch) {
     const changed = Object.keys(patch).some(key => ['snapshot','phase','deadline'].includes(key) && entry[key] !== patch[key]);
     Object.assign(entry, patch);
@@ -109,10 +130,11 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
         if (!response.ok) throw Error('Versions API unavailable');
         const data = await response.json();
         const snapshot = data?.sala_id === id && data.disponible === true && Array.isArray(data.jugadores)
-          && snapshotFresh(data.consultado_en, now()) ? data : null;
+          && snapshotFresh(data.consultado_en, now())
+          && (!data.endpoint || data.endpoint.direccion === entry.address && Number(data.endpoint.puerto) === entry.port) ? data : null;
         update(entry, {snapshot});
         if (snapshot) {
-          update(entry, {phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
+          update(entry, {pinned:pinSnapshot(snapshot, now()), phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
           return true;
         }
         return false;
@@ -149,7 +171,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       const id = room?.versionsRoomId;
       if (!roomIdValid(id)) return Promise.resolve();
       if (!entries.get(id)?.open) {
-        entries.set(id, {id, open:true, started:false, snapshot:null, nextFetch:0, pending:null,
+        entries.set(id, {id, address:room.address, port:Number(room.port), open:true, started:false, snapshot:null, pinned:null, nextFetch:0, pending:null,
           phase:'idle', jobActive:false, deadline:null});
       }
       return fetchRoom(id);
@@ -157,32 +179,40 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     close(id) {
       for (const [key, entry] of entries) if (id === undefined || key === id) {
         entry.open = false; entry.paused = true; entry.controller?.abort();
+        entry.snapshot = null; entry.pinned = null;
       }
     },
     async refresh(rooms) {
-      const ids = [...new Set(rooms.filter(r => roomIdValid(r.versionsRoomId)).map(r => r.versionsRoomId))];
+      const ids = [...new Set(rooms.map(r => entryFor(r)).filter(entry => entry?.open).map(entry => entry.id))];
       await Promise.all(ids.map(fetchRoom));
     },
-    decorate(room) { return applyRoomSnapshot(room, entries.get(room.versionsRoomId)?.snapshot, now()); },
-    status(id) {
-      const entry = entries.get(id);
+    decorate(room) {
+      const entry = entryFor(room);
+      if (entry?.open && entry.pinned && entry.address === room.address && entry.port === Number(room.port)) {
+        return {...room, players:entry.pinned};
+      }
+      return applyRoomSnapshot(room, null, now());
+    },
+    status(roomOrId) {
+      const entry = entryFor(roomOrId);
       if (!entry?.open || entry.phase === 'idle') return null;
-      if (entry.phase === 'ready') return entry.snapshot && !snapshotFresh(entry.snapshot.consultado_en, now())
-        ? {text:'Los datos vencieron. Cerrá y volvé a abrir la sala para actualizar.', retry:false} : null;
+      if (entry.phase === 'ready') return {text:'Versiones consultadas a las ' + queryTime(entry.snapshot.consultado_en), consultedAt:entry.snapshot.consultado_en, retry:false};
       if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones. Cerrá y volvé a abrir la sala para reintentar.', retry:false};
       return {text:'Consultando versiones…', retry:false};
     },
     nextExpiry() {
       const times = [];
       for (const entry of entries.values()) {
-        if (entry.snapshot && snapshotFresh(entry.snapshot.consultado_en, now())) times.push(Date.parse(entry.snapshot.consultado_en) + VERSION_TTL_MS);
-        if (entry.jobActive && entry.deadline > now()) times.push(entry.deadline);
+        if (entry.open && entry.jobActive && entry.deadline > now()) times.push(entry.deadline);
       }
       return times.length ? Math.min(...times) : null;
     },
     retain(rooms) {
-      const ids = new Set(rooms.map(r => r.versionsRoomId));
-      for (const [id, entry] of entries) if (!ids.has(id)) { entry.paused = true; entry.controller?.abort(); entries.delete(id); }
+      for (const [id, entry] of entries) {
+        const sameRoom = rooms.some(room => room.address === entry.address && Number(room.port) === entry.port
+          && (!roomIdValid(room.versionsRoomId) || room.versionsRoomId === id));
+        if (!sameRoom) { entry.open = false; entry.paused = true; entry.controller?.abort(); entries.delete(id); }
+      }
     },
     abort() {
       for (const entry of entries.values()) if (entry.controller) {

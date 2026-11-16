@@ -19,7 +19,8 @@ que el propietario revise y pruebe únicamente Preview y eden-rooms-test-db.
 6. Solo durante la espera, la web consulta estado por GET cada dos segundos.
    Ese GET nunca crea trabajos. Al estar listo lee versiones-sala una vez y deja
    de consultar versiones para esa apertura.
-7. A los 120 segundos se oculta la muestra vencida, SIN renovar ni crear un trabajo.
+7. La tarjeta conserva jugadores y versiones hasta cerrarse, con la hora original
+   «Versiones consultadas a las HH:mm» en la zona horaria del visitante.
    Para actualizar hay que cerrar y volver a abrir la tarjeta. Si hubo error, el
    mensaje indica la misma acción; no hay reintento dentro de la apertura actual.
 
@@ -34,8 +35,9 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
 
 ## Límites y seguridad
 
-- Datos visibles hasta consultado_en + 120 segundos. Ese TTL no bloquea una
-  nueva apertura ni dispara consultas periódicas. La descarga no
+- D1 y las APIs conservan su caducidad interna de 120 segundos. Solo se acepta
+  una muestra vigente al recibirla; después la tarjeta guarda una copia local
+  mientras siga abierta. El TTL no la oculta ni dispara consultas. La descarga no
   renueva la fecha. Una sala confirmada vacía es válida; un timeout no equivale
   a una sala vacía. Mantener reloj/NTP de Ubuntu sincronizado.
 - Un único trabajo por sala, incluso con peticiones concurrentes de visitantes.
@@ -71,7 +73,7 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
 
 Los límites acotan recursos, no garantizan que siempre haya capacidad ante muchas
 salas o fallos de red. La UI conserva el diseño, no bloquea navegación, no mezcla
-salas y no muestra como actuales muestras vencidas. Al cerrar una tarjeta deja de
+salas y muestra la hora original de la consulta, sin presentarla como actualización en vivo. Al cerrar una tarjeta deja de
 consultar su estado; no cancela el trabajo compartido que puede necesitar otro
 visitante. Trabajos abandonados vencen solos.
 
@@ -190,7 +192,7 @@ En otra ventana:
    /api/versiones-sala?id=sala-prueba-20668. Varios visitantes simultáneos comparten
    el mismo trabajo activo. Una apertura posterior a su finalización puede crear otro.
 6. Mantener la tarjeta abierta diez minutos: no debe haber nuevos POST de
-   versiones-consultar. A los 120 s se retira la versión sin iniciar otro trabajo.
+   versiones-consultar. Tras 120 s o varias horas siguen visibles los jugadores, versiones y hora originales.
    Cerrar/reabrir genera una nueva solicitud incluso antes de vencer esos 120 s.
 7. Detener el worker con Ctrl+C. La espera termina como máximo a los 45 s con un
    mensaje discreto que pide cerrar/reabrir. Esperar el cooldown de servidor antes
@@ -228,8 +230,8 @@ sudo systemctl disable --now eden-rooms-on-demand.service
 ```
 
 KillMode=control-group y un límite de parada de 30 s evitan dejar clientes ENet
-huérfanos. Las asignaciones pendientes vencen y las muestras dejan de verse a los
-120 s. No borrar tablas para detenerlo. Para deshabilitar también la creación de
+huérfanos. Las asignaciones pendientes vencen y la API deja de entregar muestras al cumplir
+120 s; las copias ya aceptadas por tarjetas abiertas siguen visibles hasta cerrarlas. No borrar tablas para detenerlo. Para deshabilitar también la creación de
 trabajos, cambiar ENET_JOBS_ENABLED a false solo en Preview y desplegar Preview.
 
 No usar a la vez el temporizador/recolector periódico antiguo y el worker bajo
