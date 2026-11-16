@@ -157,3 +157,25 @@ test('endpoint changes cannot relabel a previous completed snapshot as current',
     assert.equal((await c.ask('smash',now+1)).status,202);
   }finally{c.sqlite.close();}
 });
+
+test('public job states distinguish collector failure and timeout from completed empty snapshot',async()=>{
+  const c=setup();try{
+    const now=Date.now();await c.ask('smash',now);
+    let job=(await (await c.poll({action:'claim'},now)).json()).trabajo;
+    await c.poll({action:'fail',job_id:job.job_id,lease_token:job.lease_token},now+1000);
+    let state=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+1001)).json();
+    assert.equal(state.estado,'error');assert.equal(state.motivo,'collector');
+    await c.ask('smash',now+17000);
+    job=(await (await c.poll({action:'claim'},now+17000)).json()).trabajo;
+    await c.poll({action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:{...snapshot(now+17000),jugadores:[]}},now+18000);
+    state=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+18001)).json();
+    assert.equal(state.estado,'listo');assert.equal(state.motivo,undefined);
+    const result=await (await versions({env:c.env,request:c.request('/api/versiones-sala?id=smash')})).json();
+    assert.equal(result.disponible,true);assert.deepEqual(result.jugadores,[]);
+    const stale=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+150000)).json();
+    assert.equal(stale.motivo,'snapshot','a completed expired result is not a collector timeout');
+    await c.ask('smash',now+19000);
+    state=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+65000)).json();
+    assert.equal(state.estado,'error');assert.equal(state.motivo,'timeout');
+  }finally{c.sqlite.close();}
+});

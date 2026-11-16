@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {applyRoomSnapshot, createVersionsClient, mergeVersionPlayers, playerGameVersion, playerListMarkup} from '../assets/player-versions.js';
 import {parseLobbyJSON} from '../lib/lobby-json.js';
@@ -147,4 +148,70 @@ test('missing or ambiguous snapshot IP cannot be assigned even to a unique lobby
     const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:{...snapshot,jugadores})});
     await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,undefined);
   }
+});
+
+// Public directory field layout captured from /lobby; player names and versions are fixtures.
+const directoryRoom=parseLobbyJSON(readFileSync(new URL('./fixtures/lobby-smash-no-ip.json',import.meta.url),'utf8')).rooms[0];
+const smashObservations=directoryRoom.players.map((p,i)=>({nombre:p.nickname,juego:p.gameName,title_id:'01006A800016E000',virtual_ip:'10.166.1.'+(i+1),version:i?'13.0.5':'13.0.2'}));
+function fixtureClient(jugadores=smashObservations){
+  let clock=now,posts=0;
+  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
+    if(options.method==='POST'){posts++;return Response.json({estado:'listo'});}
+    return Response.json({disponible:true,sala_id:directoryRoom.versionsRoomId,consultado_en:new Date(clock).toISOString(),jugadores});
+  }});
+  return {client,advance:()=>clock+=8*3600000,posts:()=>posts};
+}
+test('real directory schema without IP matches unique nickname/game/exact Title ID and keeps live roster',async()=>{
+  const {client,advance,posts}=fixtureClient();
+  assert.equal(directoryRoom.players[0].gameId,'72174692027785216');
+  client.open(directoryRoom);await client.refresh([directoryRoom]);assert.equal(posts(),0);
+  await client.query(directoryRoom);
+  assert.deepEqual(client.decorate(directoryRoom).players.map(p=>p.gameVersion),['13.0.2','13.0.5']);
+  assert.equal(client.status(directoryRoom).result,'matched');assert.match(client.status(directoryRoom).detail,/apodo único/);
+  advance();client.retain([directoryRoom]);await client.refresh([directoryRoom]);
+  assert.equal(client.decorate(directoryRoom).players[0].gameVersion,'13.0.2');assert.equal(posts(),1);
+  const next={...directoryRoom,players:[directoryRoom.players[1],{...directoryRoom.players[0],nickname:'NewPlayer'}]};
+  client.retain([next]);
+  assert.deepEqual(client.decorate(next).players.map(p=>p.gameVersion),['13.0.5',undefined]);
+  client.retain([directoryRoom]);assert.equal(client.decorate(directoryRoom).players[0].gameVersion,undefined);
+  assert.equal(client.status(directoryRoom).result,'partial');
+  await client.query(directoryRoom);assert.equal(client.decorate(directoryRoom).players[0].gameVersion,'13.0.2');
+});
+test('no-IP fallback rejects homonyms on either side, missing/unsafe IDs, wrong game or conflicting IP',async()=>{
+  const original=directoryRoom.players[0];
+  for(const players of [[original,original],[original,{...original,gameName:'Other'}],
+    [{...original,gameId:undefined}],[{...original,gameId:0}],[{...original,gameId:Number(original.gameId)}],
+    [{...original,gameId:'1'}],[{...original,gameName:'Other'}],[{...original,fakeIp:'10.1.2.3'}]]){
+    const {client}=fixtureClient();const r={...directoryRoom,players};await client.query(r);
+    assert.ok(client.decorate(r).players.every(p=>!p.gameVersion));
+    assert.equal(client.status(r).result,'association_error');
+  }
+  const {client}=fixtureClient([smashObservations[0],{...smashObservations[0],juego:'Other',virtual_ip:'10.166.1.9'}]);
+  await client.query(directoryRoom);assert.ok(client.decorate(directoryRoom).players.every(p=>!p.gameVersion));
+});
+test('completed empty, no-version and association failures have separate diagnostic states',async()=>{
+  for(const [observed,result,detail] of [[[],'empty',/sin jugadores/],
+    [[{...smashObservations[0],version:''}],'no_versions',/ninguno anunció/],
+    [[{...smashObservations[0],nombre:'Unknown'}],'association_error',/no se pudieron asociar/]]){
+    const {client}=fixtureClient(observed);await client.query(directoryRoom);
+    const status=client.status(directoryRoom);assert.equal(status.result,result);assert.match(status.detail,detail);
+    assert.equal(status.consultedAt,new Date(now).toISOString());assert.equal(status.matched,0);
+  }
+});
+test('collector failure, wait timeout, HTTP failure and unavailable snapshot are not association errors',async()=>{
+  for(const [response,reason] of [[{estado:'error',motivo:'collector'},'collector'],[{estado:'error',motivo:'timeout'},'timeout'],
+    [{estado:'error'},'job'],[{estado:'listo'},'snapshot']]){
+    const client=createVersionsClient({fetcher:async(url,options)=>Response.json(options.method==='POST'?response:{disponible:false})});
+    await client.query(directoryRoom);const status=client.status(directoryRoom);
+    assert.equal(status.result,'error');assert.equal(status.reason,reason);assert.equal(status.consultedAt,undefined);
+  }
+  const client=createVersionsClient({fetcher:async()=>new Response('gateway',{status:503})});
+  await client.query(directoryRoom);assert.equal(client.status(directoryRoom).reason,'request');
+});
+
+test('Mario Kart also associates without directory IP using exact title',async()=>{
+  const current={...room,players:[{...player,gameId:BigInt('0x'+observation.title_id).toString()}]};
+  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:snapshot)});
+  await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
+  assert.equal(client.decorate(current).players[0].gameTitleId,observation.title_id);
 });

@@ -190,7 +190,7 @@ de las versiones. Abrir o reabrir tarjetas no inicia ENet. Solo el enlace
 pendiente. No ejecutar el temporizador periódico antiguo junto al worker.
 
 Las versiones aceptadas no vencen visualmente y muestran su hora original.
-Se aplican a identidades actuales seguras (nombre/IP virtual, juego y Title ID),
+Se aplican a identidades actuales seguras (nombre/IP virtual o apodo único en ambas listas + juego/Title ID exactos),
 sin fijar el listado antiguo ni atribuir versiones a jugadores nuevos. D1/API
 conservan 120 s. Ver [PREVIEW_VERSIONS.md](PREVIEW_VERSIONS.md) para limitaciones
 y [ON_DEMAND.md](ON_DEMAND.md) para instalación previa. Esta etapa no necesita

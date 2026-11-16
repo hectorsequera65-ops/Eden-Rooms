@@ -16,7 +16,8 @@ que el propietario revise y pruebe únicamente Preview y eden-rooms-test-db.
 5. La página sigue el estado por GET cada 2 s únicamente mientras espera y lee
    versiones-sala una vez al terminar. No hay renovación automática.
 6. La lista actual sigue siendo la del directorio. Las versiones se asocian por
-   nombre e IP virtual únicos, juego y Title ID cuando existe. No se sustituye
+   nombre/IP virtual únicos; si el directorio no publica IP, apodo único en
+   ambas listas, juego exacto y Title ID no nulo coincidente. No se sustituye
    el listado por la captura ENet. Sin identidad segura: «Versión sin consultar».
 7. Las versiones conocidas no vencen visualmente y muestran su hora original.
    Una salida, cambio de identidad/juego o ambigüedad detectada invalida la
@@ -29,7 +30,8 @@ registro de sesiones. Una salida y reentrada entre muestras con idéntico nombre
 IP virtual y juego no es distinguible. No se inventan identificadores de sesión.
 Si el directorio omite players/nombres no hay otra fuente automática disponible:
 no se rellena la lista con una captura ENet antigua. Sin IP compartida no se
-atribuye una versión solo por apodo, aunque sea único.
+atribuye una versión solo por apodo: se exige además juego y Title ID exactos,
+con apodo único en las dos listas. La tarjeta informa ese modo de asociación.
 
 Esta etapa no cambia el esquema, los secretos ni la API privada del worker.
 No requiere migración adicional ni reinstalar/reiniciar eden-rooms-on-demand.service.

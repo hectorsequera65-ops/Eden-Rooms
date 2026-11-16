@@ -17,7 +17,7 @@ export function withoutEnetVersion(player) {
   if (!['enet','enet-card'].includes(player.gameVersionSource)) return player;
   const result = {...player};
   delete result.gameVersion; delete result.gameTitleId;
-  delete result.gameVersionSource; delete result.gameVersionObservedAt;
+  delete result.gameVersionSource; delete result.gameVersionObservedAt; delete result.gameVersionMatch;
   return result;
 }
 export function playerGameVersion(player, now = Date.now()) {
@@ -79,15 +79,61 @@ export function applyRoomSnapshot(room, snapshot, now = Date.now()) {
   if (snapshot.endpoint && (snapshot.endpoint.direccion !== room.address || Number(snapshot.endpoint.puerto) !== Number(room.port))) return clean;
   return {...clean, players: mergeVersionPlayers(players, snapshot.jugadores, {observedAt: snapshot.consultado_en, now})};
 }
-// Identity is scoped to a room and uninterrupted presence in directory samples.
-// Names alone cannot establish continuity across independent ENet observations.
+// The public directory currently omits virtual IPs. A fallback requires a
+// unique nickname on BOTH sides, exact game and an exact nonzero Title ID.
+// Neither mode can detect a disconnect/reconnect between directory samples.
+function directoryTitle(player) {
+  try {
+    if (typeof player.gameId === 'number' && !Number.isSafeInteger(player.gameId)) return null;
+    if (!/^[0-9]+$/.test(String(player.gameId))) return null;
+    const id = BigInt(player.gameId);
+    return id > 0n && id <= 0xffffffffffffffffn ? id.toString(16).toUpperCase().padStart(16,'0') : null;
+  } catch { return null; }
+}
 function identity(player) {
-  const ip = virtualIp(player);
-  return player?.nickname && ip ? JSON.stringify([player.nickname, ip, player.gameName, String(player.gameId ?? '')]) : null;
+  const ip = virtualIp(player), title = directoryTitle(player);
+  if (!player?.nickname || !player.gameName || ip === null) return null;
+  if (ip) return JSON.stringify(['ip',player.nickname,ip,player.gameName,title]);
+  return title ? JSON.stringify(['name-title',player.nickname,player.gameName,title]) : null;
 }
 function identities(players) {
-  const keys = (players || []).map(identity).filter(Boolean);
-  return new Set(keys.filter(key => keys.filter(k => k === key).length === 1));
+  const list = players || [], keys = list.map(identity);
+  return new Set(keys.filter((key,index) => key && keys.filter(k => k === key).length === 1
+    && (virtualIp(list[index]) || list.filter(p => p.nickname === list[index].nickname).length === 1)));
+}
+function manualPlayers(room, entry) {
+  const players = Array.isArray(room.players) ? room.players.map(withoutEnetVersion) : [];
+  if (!entry?.snapshot || entry.address !== room.address || entry.port !== Number(room.port)) return players;
+  const observations = entry.snapshot.jugadores;
+  const merged = mergeVersionPlayers(players, observations);
+  return players.map((player,index) => {
+    if (!entry.eligible.has(identity(player))) return player;
+    const ip = virtualIp(player), title = directoryTitle(player);
+    if (ip) {
+      if (!observations.some(o => o?.nombre === player.nickname && virtualIp(o) === ip)) return player;
+    } else {
+      const matches = observations.filter(o => o?.nombre === player.nickname);
+      if (!title || players.filter(p => p.nickname === player.nickname).length !== 1
+        || matches.length !== 1 || virtualIp(matches[0]) === null
+        || matches[0].title_id !== title) return player;
+    }
+    return merged[index]?.gameVersion && merged[index] !== player ? {...merged[index],
+      gameVersionSource:'enet-card', gameVersionObservedAt:entry.snapshot.consultado_en,
+      gameVersionMatch:ip?'name-ip':'name-title'} : player;
+  });
+}
+function associationResult(room, entry) {
+  const observations = entry.snapshot.jugadores;
+  const versioned = observations.filter(o => String(o?.version || '').trim()).length;
+  const players = manualPlayers(room,entry), matched = players.filter(p => p.gameVersionSource === 'enet-card').length;
+  const fallback = players.some(p => p.gameVersionMatch === 'name-title');
+  let result, detail;
+  if (!observations.length) {result='empty';detail='ENet completó la consulta sin jugadores.';}
+  else if (!versioned) {result='no_versions';detail='ENet devolvió jugadores, pero ninguno anunció una versión.';}
+  else if (!matched) {result='association_error';detail='ENet devolvió '+versioned+' versiones, pero no se pudieron asociar con seguridad a los jugadores actuales. Se requiere nombre/IP virtual o apodo único, juego y Title ID exactos; no se reutilizan identidades que cambiaron.';}
+  else {result=matched<versioned?'partial':'matched';detail='ENet devolvió '+versioned+' versiones; '+matched+' asociadas a jugadores actuales.';}
+  if (fallback) detail+=' Coincidencia por apodo único, juego y Title ID; el directorio no informa IP virtual.';
+  return {result,detail,received:observations.length,versioned,matched};
 }
 function queryTime(timestamp) {
   return new Intl.DateTimeFormat('es', {hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(new Date(timestamp));
@@ -107,15 +153,15 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     Object.assign(entry, patch);
     if (changed && entry.open && entries.get(entry.id) === entry) onChange();
   }
-  function failed(entry) {
-    update(entry, {phase:'error', jobActive:false, deadline:null, nextFetch:Infinity});
+  function failed(entry, reason = 'request') {
+    update(entry, {errorReason:reason, phase:'error', jobActive:false, deadline:null, nextFetch:Infinity});
   }
   async function fetchRoom(id) {
     const entry = entries.get(id);
     if (!entry?.open) return;
     if (entry.pending) return entry.pending;
     if (entry.started && !entry.jobActive) return; // An opening can enqueue only once.
-    if (entry.jobActive && entry.deadline !== null && now() >= entry.deadline) { failed(entry); return; }
+    if (entry.jobActive && entry.deadline !== null && now() >= entry.deadline) { failed(entry,'timeout'); return; }
     if (now() < entry.nextFetch) return;
     const enqueue = !entry.started;
     entry.started = true; // Latch before yielding, including lost/aborted POST responses.
@@ -145,13 +191,13 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
         if ((!response.ok && response.status !== 429) || data?.sala_id && data.sala_id !== id) throw Error('Queue unavailable');
         if (data.estado === 'listo') {
           entry.jobActive = true;
-          if (!await readSnapshot()) throw Error('No fresh result');
+          if (!await readSnapshot()) failed(entry,'snapshot');
         } else if (data.estado === 'pendiente' || data.estado === 'consultando') {
           const wait = Math.min(45000, Number(data.espera_ms));
           if (!Number.isFinite(wait) || wait <= 0) { failed(entry); return; }
           const deadline = Math.min(entry.deadline ?? Infinity, now() + wait);
           update(entry, {phase:'loading', jobActive:true, deadline, nextFetch:now() + VERSION_POLL_MS});
-        } else if (data.estado === 'error' || response.status === 429) failed(entry);
+        } else if (data.estado === 'error' || response.status === 429) failed(entry, response.status===429?'rate_limit':data.motivo==='collector'?'collector':data.motivo==='timeout'?'timeout':data.motivo==='snapshot'?'snapshot':'job');
         else throw Error('Invalid job status');
       }
       try {
@@ -203,24 +249,24 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     },
     decorate(room) {
       const entry = entryFor(room);
-      const clean = applyRoomSnapshot(room, null, now());
-      if (!entry?.snapshot || entry.address !== room.address || entry.port !== Number(room.port)) return clean;
-      // Filter by uninterrupted directory identity before matching the historical sample.
-      const observations = entry.snapshot.jugadores;
-      const mergedPlayers = mergeVersionPlayers(clean.players || [], observations);
-      return {...clean, players:(clean.players || []).map((player, index) => {
-        if (!entry.eligible.has(identity(player)) || !observations.some(o => o?.nombre === player.nickname
-          && virtualIp(o) && virtualIp(o) === virtualIp(player))) return player;
-        const merged = mergedPlayers[index];
-        return merged?.gameVersion && merged !== player
-          ? {...merged, gameVersionSource:'enet-card', gameVersionObservedAt:entry.snapshot.consultado_en} : player;
-      })};
+      return {...room,players:manualPlayers(room,entry)};
     },
     status(roomOrId) {
       const entry = entryFor(roomOrId);
       if (!entry?.open || entry.phase === 'idle') return null;
-      if (entry.phase === 'ready') return {text:'Versiones consultadas a las ' + queryTime(entry.snapshot.consultado_en), consultedAt:entry.snapshot.consultado_en, retry:false};
-      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones. Pulsá Consultar versiones para reintentar.', retry:false};
+      if (entry.phase === 'ready') {
+        const result = typeof roomOrId === 'object' ? associationResult(roomOrId,entry) : {};
+        return {text:'Versiones consultadas a las ' + queryTime(entry.snapshot.consultado_en),
+          consultedAt:entry.snapshot.consultado_en, ...result, retry:false};
+      }
+      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) {
+        const reason = entry.phase !== 'error' ? 'timeout' : entry.errorReason;
+        const detail = {collector:'El recolector ENet informó un error.', timeout:'No llegó el resultado ENet dentro del tiempo de espera.',
+          snapshot:'El trabajo terminó, pero la API no entregó una muestra vigente y válida.',
+          rate_limit:'Se alcanzó un límite de solicitudes; esperá antes de reintentar.',job:'El trabajo ENet no pudo completarse.'}[reason]
+          || 'No se pudo leer la respuesta de Cloudflare.';
+        return {text:'No se pudieron consultar las versiones. '+detail+' Pulsá Consultar versiones para reintentar.', result:'error', reason, retry:false};
+      }
       return {text:'Consultando versiones…', retry:false};
     },
     nextExpiry() {

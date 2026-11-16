@@ -133,7 +133,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.route('**/api/**',async route=>{
         const request=route.request(),url=new URL(request.url());
         if(url.pathname.startsWith('/api/collector'))privateRequests++;
-        if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms:[{name:'Preview bajo demanda',address:'69.24.117.72',port:20668,maxPlayers:32,preferredGameName:game,versionsRoomId:id,players:[{nickname:'Eden',gameName:game,virtual_ip:'10.0.0.10'}]}]}});
+        if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms:[{name:'Preview bajo demanda',address:'69.24.117.72',port:20668,maxPlayers:32,preferredGameName:game,versionsRoomId:id,players:[{nickname:'Eden',gameName:game,gameId:'72174692027785216',username:'',avatarUrl:''}]}]}});
         if(url.pathname==='/api/versiones-sala')return route.fulfill({json:ready?{disponible:true,sala_id:id,consultado_en:new Date(now+4000).toISOString(),jugadores:[{nombre:'Eden',juego:game,virtual_ip:'10.0.0.10',title_id:'01006A800016E000',version:'13.0.5'}]}:{disponible:false,sala_id:id,jugadores:[]}});
         if(url.pathname==='/api/versiones-consultar'){
           if(request.method()==='POST'){
@@ -157,6 +157,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       assert.equal(queued,1);
       await page.clock.fastForward(2000);await expect.poll(()=>polls).toBe(1);
       await page.clock.fastForward(2000);await expect(page.locator('.room-open .player-version')).toHaveText('Versión 13.0.5');
+      await expect(page.locator('.version-association-detail')).toContainText('apodo único');
       assert.equal(queued,1);assert.equal(privateRequests,0);
       await page.clock.fastForward(600001);
       assert.equal(queued,1,'ten minutes with the card open must not enqueue again');

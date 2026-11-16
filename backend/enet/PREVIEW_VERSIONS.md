@@ -27,8 +27,12 @@ D1 y las APIs mantienen su caducidad y sus protecciones sin cambios.
 
 La lista visible siempre es la del directorio, nunca los jugadores de la captura.
 Se asocian versiones por nombre + IP virtual únicos, juego y Title ID cuando
-está disponible, conservando enteros de 64 bits exactos. Sin IP compartida o
-ante ambigüedad se muestra «Versión sin consultar». Cambios de juego/identidad,
+está disponible, conservando enteros de 64 bits exactos. El directorio real no
+publica IP virtual (campos nickname, gameName, gameId, username, avatarUrl). En
+ese caso se exige apodo único en ambas listas, juego exacto y Title ID no nulo
+coincidente. La interfaz indica que usó esa coincidencia, sin afirmar identidad
+de sesión verificada. Nunca se usa ese modo ante una IP contradictoria o inválida.
+Ante ambigüedad o identificadores insuficientes: «Versión sin consultar». Cambios de juego/identidad,
 salidas o duplicados detectados invalidan la asociación anterior hasta consultar
 manualmente. Actualizar el listado visible no borra datos históricos en D1.
 
@@ -64,3 +68,27 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 Chromium requiere EDEN_PLAYWRIGHT_MODULE y /usr/bin/chromium (o EDEN_CHROMIUM).
 La prueba ENet requiere EDEN_TEST_CLIENT y EDEN_TEST_SERVER, descritos en README.md.
+
+## Diagnóstico de consultas
+
+Una hora de consulta solo confirma que se recibió una muestra válida, no que
+se asociaran todos sus jugadores. La tarjeta muestra además uno de estos estados:
+
+- ENet completó sin jugadores (muestra vacía confirmada).
+- Jugadores recibidos pero ninguna versión anunciada.
+- Versiones recibidas sin coincidencias seguras con el listado actual.
+- Cantidad de versiones recibidas y asociadas (incluye asociaciones parciales).
+- Error del recolector comunicado por el trabajo, timeout de espera, límite de
+  solicitudes, error HTTP/API o trabajo terminado sin muestra válida.
+
+La API pública de trabajos solo expone un motivo fijo de error (collector,
+timeout, blocked, snapshot o job), nunca tokens, claves, direcciones ni logs privados.
+Las pruebas usan el formato real del directorio sin IP; los nombres/versiones
+de fixtures son sintéticos. Las pruebas anteriores solo cubrían directorios con
+IP, por eso no detectaron que el filtro obligatorio de IP descartaba a todos.
+
+El acceso HTTPS al Preview desde este entorno devolvió error del proxy CONNECT
+403; no se pudo comprobar la muestra D1 ni el trabajo real de las 15:00. El
+upstream /lobby sí respondió HTTP 200 y confirmó la ausencia de IP en la sala
+69.24.117.72:20668. La corrección debe validarse en Preview con una nueva consulta
+manual y sus respuestas de versiones-sala y versiones-consultar.
