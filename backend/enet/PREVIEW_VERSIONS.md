@@ -1,147 +1,66 @@
-# Versiones por jugador en Preview
+# Jugadores en vivo y versiones manuales — Preview
 
-La etapa actual es estrictamente por apertura: ver [ON_DEMAND.md](ON_DEMAND.md).
-Un POST por apertura; GET de estado solo mientras haya trabajo pendiente. Los
-120 s siguen aplicándose a D1/API, pero no ocultan una copia ya aceptada por
-una tarjeta abierta. Se muestra la hora original de consulta y no se activa trabajo. Una reapertura no está
-bloqueada por esa caché. No activar el temporizador periódico antiguo.
+Entorno exclusivo: test/enet-versions-sralcer, eden-rooms-test-db.
+Ver [ON_DEMAND.md](ON_DEMAND.md) para instalación previa y seguridad.
+Esta etapa no necesita migración, cambios de secretos ni cambios del servicio Ubuntu.
+No activar el temporizador periódico antiguo.
 
-Entorno exclusivo: test/enet-versions-sralcer. Los fetch de la página son relativos
-al origen actual; al abrir el Preview usan su DB=eden-rooms-test-db y nunca
-redirigen a producción. No se cambian tablas, bindings, secretos ni configuraciones
-de producción. No se modifica eden-sala ni se activa ninguna unidad de Ubuntu.
+## Fuentes independientes
 
-## Asociación y visualización
+/api/rooms obtiene rooms[].players del directorio https://api.ynet-fun.xyz/lobby.
+La página sigue actualizando esa lista cada 10 segundos mientras está visible;
+la API tiene caché de 5 segundos. El código anterior a la captura persistente
+usaba esa misma lista para nombres, juegos, cantidad y filtros.
+La API sigue registrando versionsRoomId por endpoint autorizado. Las versiones
+ENet añadidas por /api/rooms se quitan en la UI: no sustituyen la consulta manual.
 
-/api/rooms lee el registro de salas autorizadas y endpoints en D1 y agrega
-versionsRoomId cuando la dirección y el puerto coinciden con una única sala
-registrada. El nombre visible no se usa como identificador. La UI no necesita
-acceder a /api/autorizaciones ni conocer claves privadas.
+Abrir/cerrar/reabrir no inicia ENet. Solo «↻ Consultar versiones», junto a
+«Ver descripción», envía POST /api/versiones-consultar. Clics durante la espera
+comparten la solicitud; el botón queda deshabilitado. GET cada 2 s solo sigue
+el trabajo pendiente y después lee /api/versiones-sala una vez.
 
-Al abrir la tarjeta de una sala registrada con jugadores, la página consulta
-/api/versiones-sala?id=versionsRoomId en su propio origen. La respuesta incluye
-sala_id, consultado_en, expira_en, endpoint y jugadores. La interfaz exige ID
-coincidente y, si hay endpoint en la respuesta, comprueba dirección y puerto.
+Solo se acepta una respuesta vigente (120 s), de la sala y endpoint correctos.
+La copia local después no vence y muestra «Versiones consultadas a las HH:mm»
+en la zona horaria del visitante. Otro clic manual reemplaza esa copia. Cerrar
+no borra resultados conocidos; recargar la página sí descarta el estado local.
+D1 y las APIs mantienen su caducidad y sus protecciones sin cambios.
 
-Jugadores: nombre + IP virtual cuando están disponibles. Se reconocen virtual_ip,
-fakeIp, fake_ip y virtualIp, tanto IPv4 textual como array de cuatro octetos.
-Si no hay IP común, solo se usa un apodo único en ambas listas. IPs contradictorias,
-IPs inválidas, identidades duplicadas, otro juego o un Title ID incompatible no
-reciben versiones. Dos jugadores con el mismo apodo sí pueden distinguirse si
-ambos extremos tienen sus IPs y la pareja nombre/IP es única.
+La lista visible siempre es la del directorio, nunca los jugadores de la captura.
+Se asocian versiones por nombre + IP virtual únicos, juego y Title ID cuando
+está disponible, conservando enteros de 64 bits exactos. Sin IP compartida o
+ante ambigüedad se muestra «Versión sin consultar». Cambios de juego/identidad,
+salidas o duplicados detectados invalidan la asociación anterior hasta consultar
+manualmente. Actualizar el listado visible no borra datos históricos en D1.
 
-El backend conserva enteros JSON de 64 bits como cadenas exactas antes de que
-JSON.parse los redondee. Esto permite comparar gameId con el Title ID hexadecimal
-sin inventar coincidencias. La UI mantiene clases, disposición y estilo existentes:
-nombre, juego y «Versión X». Sin una versión vigente muestra nombre y juego,
-sin marcadores vacíos ni una versión inferida del juego preferido de la sala.
-Todos los textos se escapan antes de insertarse en el HTML.
+El directorio no ofrece aquí un identificador de sesión correlacionado con el
+paquete ENet. Si alguien sale y vuelve entre dos refrescos con idéntica identidad,
+no se puede detectar. Si faltan nombres individuales en el directorio no se
+simulan: solo se muestra la información disponible sin consultar ENet de oficio.
 
-## Frecuencia y caducidad
+## Verificación en Preview
 
-- Solo el evento explícito de abrir la tarjeta inicia un POST por apertura.
-- Una vez terminada la consulta, no hay más lecturas de versiones ni nuevos POST
-  mientras esa tarjeta siga abierta. El refresco del lobby sigue independiente.
-- Los GET cada dos segundos siguen exclusivamente el trabajo pendiente y no lo
-  crean ni lo reinician. Cerrar la tarjeta deja de seguirlo, sin cancelar el
-  trabajo compartido que puede necesitar otro visitante.
-- Cerrar/reabrir permite otra solicitud, incluso con datos de menos de 120 s.
-  Si ya hay un trabajo activo de esa sala, Cloudflare lo comparte. Se conservan
-  cuotas, cooldown, límites de concurrencia y validación de destinos.
-- La tarjeta conserva la lista de jugadores y versiones recibida hasta cerrarse,
-  aunque cambie el lobby o pasen horas. «Versiones consultadas a las HH:mm»
-  identifica la hora original en la zona horaria del visitante. No se renueva.
-- Solo se aceptan respuestas vigentes al recibirlas. D1 y las APIs mantienen
-  los 120 s; cerrar descarta la copia local y reabrir espera un resultado nuevo.
-- Tras error, el mensaje indica cerrar/reabrir. No se reenvía un POST perdido o
-  abortado por ocultar la pestaña dentro de la misma apertura.
-- Las identidades ambiguas no reciben versiones; una copia no se reasigna a
-  jugadores nuevos del lobby ni a otra sala.
+1. Esperar el despliegue del commit y confirmar DB=eden-rooms-test-db.
+2. Abrir una sala registrada. En Network no debe haber POST versiones-consultar.
+3. Sin consultar versiones, comprobar entradas/salidas y cantidades cada 10 s.
+4. Pulsar Consultar versiones: un POST con solo sala_id; aparece el estado de
+   espera, luego versiones y hora original. El navegador no recibe claves.
+5. Esperar más de 120 s: las versiones de identidades que continúan presentes
+   siguen visibles. Si sale alguien desaparece; los nuevos quedan sin consultar.
+6. Cerrar y reabrir: ningún POST. Otro clic sí consulta de nuevo, sujeto a cuotas,
+   cooldown y deduplicación. Comprobar también desde un celular.
 
-## Recolector automático: propuesta, no activada
+## Pruebas locales
 
-Se actualizaron eden-rooms-enet.service y el nuevo eden-rooms-enet.timer:
-URL fija https://test-enet-versions-sralcer.eden-rooms.pages.dev, una sala indicada
-por EDEN_ROOM_ID, --send --once --duration 15. La unidad requiere un ID no vacío;
-si falta, no consulta todas las salas por accidente. El archivo de entorno propuesto
-es /etc/eden-rooms-enet-preview.env, con secretos exclusivos de Preview, nunca los
-secretos de producción. EnvironmentFile de systemd no reemplaza variables del shell.
-
-El temporizador espera 30 s después de finalizar cada intento, sin solapar su
-propia unidad. Un ciclo habitual dura unos 46–60 s incluyendo conexión/HTTP: deja
-margen antes de los 120 s. No es una garantía bajo caídas de red o carga extrema;
-si faltan muestras, la web muestra solo el juego al vencer las anteriores.
-
-SnapshotPublisher compara el contenido completo de jugadores sin considerar orden
-ni fecha de consulta: envía cambios de inmediato, omite duplicados y mantiene un
-heartbeat de 60 s en ejecuciones continuas. Un POST fallido no se considera publicado.
-En cada nueva ejecución oneshot se envía la primera muestra válida para renovar D1.
-Una sala confirmada vacía se publica vacía; un error/timeout no se convierte en vacío.
-
-NO se instaló, habilitó, inició ni reinició ningún servicio/temporizador. No se
-incluyen comandos de activación en esta etapa. No ejecutar simultáneamente otra
-copia continua del recolector sobre la misma sala cuando se active más adelante.
-
-## Cómo verificar el Preview tras el push
-
-1. Esperar el deployment Preview del nuevo commit, sin promoverlo a producción.
-   Confirmar que su binding DB sigue siendo eden-rooms-test-db. No hace falta
-   migración: se reutilizan las tres tablas existentes y jugadores_json.
-2. Abrir https://test-enet-versions-sralcer.eden-rooms.pages.dev/api/rooms y buscar
-   el endpoint registrado para sala-prueba-20668. Debe llevar
-   versionsRoomId="sala-prueba-20668". Si no aparece, comprobar IP/dominio y puerto
-   en salas_endpoints y que no haya duplicados. No basta el nombre de la sala.
-   La sala debe seguir publicada en el lobby: no se crean tarjetas de salas
-   desconectadas a partir de una captura almacenada.
-3. Revisar https://test-enet-versions-sralcer.eden-rooms.pages.dev/api/versiones-sala?id=sala-prueba-20668
-   y confirmar disponible=true y consultado_en reciente. Si el recolector se detuvo
-   hace más de 120 s, disponible=false es correcto y la página no debe inventar datos.
-4. Si hace falta renovar manualmente la muestra, con el binario actual, la clave
-   de Preview en el entorno y sin activar ningún servicio:
-
-```sh
-python3 backend/enet/collector.py \
-  --base-url https://test-enet-versions-sralcer.eden-rooms.pages.dev \
-  --client ./work/eden-collector --room-id sala-prueba-20668 \
-  --send --once --duration 15
-```
-
-   Ese comando sí consulta temporalmente la sala y escribe SOLO en el D1 del
-   Preview; ejecutarlo únicamente si se quiere renovar la muestra de prueba.
-5. Abrir https://test-enet-versions-sralcer.eden-rooms.pages.dev/ y desplegar la
-   tarjeta de la sala. Usar «Ver los N jugadores» si hay más de cuatro. Cada versión
-   debe coincidir con el registro de su jugador; quien no tenga versión conserva
-   únicamente el juego junto a su nombre. El diseño de la tarjeta no cambia.
-6. En Network del navegador comprobar la petición versiones-sala y su ID. Reabrir
-   la misma tarjeta realiza otro POST incluso con datos frescos. Mantenerla abierta
-   no genera solicitudes ENet periódicas. Al detener el recolector y
-   esperar más de 120 s: jugadores, versiones y hora deben permanecer visibles.
-   Al cerrar/reabrir se retiran y se reemplazan al terminar la nueva consulta.
-7. Confirmar que otra sala con el mismo apodo no hereda versiones y que en móvil
-   no hay desbordamiento horizontal. Ninguna clave debe estar en solicitudes del
-   navegador a versiones-sala.
-
-## Pruebas
-
-Node: matcher, IPs, apodos duplicados, Title IDs exactos, XSS, caché/deduplicación,
-fallos de red, caducidad límite, SQL real para POST -> D1 -> lectura de rooms.
-Python: parser binario, publisher, supresión de duplicados, heartbeat, cambio de
-jugadores y reintento tras un POST fallido. ENet de integración solo en loopback.
-Chromium: página real de escritorio y móvil con API fixtures locales; apertura de
-sala, versiones, jugador sin versión, duplicados por IP, persistencia durante horas, hora de consulta, reapertura y aislamiento de salas.
-No hacen escrituras en D1 remoto ni consultas a salas públicas.
+Node cubre SQL real, autenticación, límites, coincidencias, caducidad de API,
+consultas manuales y continuidad de identidad. Chromium usa APIs simuladas locales
+sobre la página real en escritorio y móvil, con reloj adelantado durante horas.
+Python cubre protocolo binario, collector y worker; ENet de integración solo loopback.
+No se escriben datos remotos ni se consulta ninguna sala pública en estas pruebas.
 
 ```sh
 node --test tests/*.test.mjs
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-La prueba Chromium es opcional si no se indica EDEN_PLAYWRIGHT_MODULE con una
-instalación de @playwright/test. Usa Chromium local (/usr/bin/chromium o la ruta
-EDEN_CHROMIUM). La prueba ENet requiere EDEN_TEST_CLIENT y EDEN_TEST_SERVER para
-sus dos binarios locales, como se explica en README.md.
-
-La consulta directa al Preview desde este entorno de desarrollo quedó bloqueada
-por el proxy (Tunnel connection failed: 403 Forbidden); las comprobaciones de UI
-se hicieron localmente. La operación de D1 remoto se basa en la confirmación del
-usuario y debe comprobarse en el Preview tras su despliegue automático.
+Chromium requiere EDEN_PLAYWRIGHT_MODULE y /usr/bin/chromium (o EDEN_CHROMIUM).
+La prueba ENet requiere EDEN_TEST_CLIENT y EDEN_TEST_SERVER, descritos en README.md.

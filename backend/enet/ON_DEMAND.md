@@ -7,22 +7,29 @@ que el propietario revise y pruebe únicamente Preview y eden-rooms-test-db.
 
 ## Recorrido
 
-1. Cada apertura explícita de una tarjeta registrada envía UNA solicitud POST
-   /api/versiones-consultar con solo sala_id, incluso si D1 conserva datos vigentes.
-2. Cloudflare verifica sala y endpoint. Si hay trabajo pendiente/en ejecución,
-   comparte ese trabajo; si no lo hay, crea uno respetando cola, cuotas y cooldown.
-3. La tarjeta muestra «Consultando versiones…». Reabrir puede pedir trabajo nuevo;
-   dejar la tarjeta abierta, actualizar el lobby o volver a la pestaña no lo hace.
-4. job_worker.py retira un trabajo autenticado por HTTPS, valida la IPv4 y su lista
-   local y reutiliza collector.collect, protocol.py y client.c como sralcer.
-5. La finalización guarda versiones y marca el trabajo listo en una transacción.
-6. Solo durante la espera, la web consulta estado por GET cada dos segundos.
-   Ese GET nunca crea trabajos. Al estar listo lee versiones-sala una vez y deja
-   de consultar versiones para esa apertura.
-7. La tarjeta conserva jugadores y versiones hasta cerrarse, con la hora original
-   «Versiones consultadas a las HH:mm» en la zona horaria del visitante.
-   Para actualizar hay que cerrar y volver a abrir la tarjeta. Si hubo error, el
-   mensaje indica la misma acción; no hay reintento dentro de la apertura actual.
+1. Abrir o reabrir una tarjeta NO crea trabajo ENet. El listado de jugadores
+   procede de /api/rooms y se actualiza cada 10 s, como antes de las versiones.
+2. Solo «↻ Consultar versiones», junto a «Ver descripción», envía un POST
+   /api/versiones-consultar con sala_id. Se deshabilita durante la espera.
+3. Cloudflare valida sala/endpoint y comparte el trabajo activo, respetando cuotas.
+4. El worker Ubuntu consulta temporalmente como sralcer; no cambia su servicio.
+5. La página sigue el estado por GET cada 2 s únicamente mientras espera y lee
+   versiones-sala una vez al terminar. No hay renovación automática.
+6. La lista actual sigue siendo la del directorio. Las versiones se asocian por
+   nombre e IP virtual únicos, juego y Title ID cuando existe. No se sustituye
+   el listado por la captura ENet. Sin identidad segura: «Versión sin consultar».
+7. Las versiones conocidas no vencen visualmente y muestran su hora original.
+   Una salida, cambio de identidad/juego o ambigüedad detectada invalida la
+   asociación hasta la siguiente consulta manual. Los históricos de D1 no se borran.
+8. Cerrar/reabrir conserva resultados conocidos sin generar POST. Se puede
+   consultar otra vez con el enlace, incluso tras error; se mantienen los límites.
+
+Limitación: el directorio se observa cada 10 s (API con caché de 5 s), no es un
+registro de sesiones. Una salida y reentrada entre muestras con idéntico nombre,
+IP virtual y juego no es distinguible. No se inventan identificadores de sesión.
+Si el directorio omite players/nombres no hay otra fuente automática disponible:
+no se rellena la lista con una captura ENet antigua. Sin IP compartida no se
+atribuye una versión solo por apodo, aunque sea único.
 
 Esta etapa no cambia el esquema, los secretos ni la API privada del worker.
 No requiere migración adicional ni reinstalar/reiniciar eden-rooms-on-demand.service.
@@ -45,12 +52,12 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
   El worker también limita sus hilos a uno o dos. No iniciar varias copias para
   intentar aumentar ese límite.
 - Hasta 50 trabajos activos en cola; 10 solicitudes NUEVAS por IP/minuto.
-  Solicitudes compartidas y muestras vigentes no crean más consultas ENet.
+  Solicitudes compartidas no crean más consultas ENet.
 - Espera máxima de 45 segundos; cada asignación tiene un token privado aleatorio
   y una lease de hasta 30 segundos. Un resultado vencido/repetido o de otro trabajo
   no puede escribir. La autorización y el endpoint se revisan de nuevo al terminar.
-- Tras error se exige cerrar/reabrir. Cloudflare conserva el cooldown de 15 s
-  y las cuotas: reapertura permite solicitar, pero no evita los límites de seguridad.
+- Tras error se permite reintentar con el enlace. Cloudflare conserva el cooldown de 15 s
+  y las cuotas: el enlace permite solicitar, pero no evita los límites de seguridad.
   La interfaz no reencola indefinidamente si Ubuntu está desconectado.
 - El navegador solo envía sala_id; se rechazan direccion, puerto y otros campos.
   Los POST públicos exigen JSON, origen idéntico y body de hasta 512 bytes, leído
@@ -113,8 +120,8 @@ Después de guardar esta configuración, desplegar/reintentar únicamente la ram
 Preview. Usar el alias canónico:
 https://test-enet-versions-sralcer.eden-rooms.pages.dev
 Los hosts por hash de deployment y dominios ajenos no están habilitados para la
-cola. Una apertura necesita la cola para solicitar una muestra nueva. Si falta la
-configuración, la UI muestra un error discreto con la indicación de cerrar/reabrir.
+cola. Una consulta manual necesita la cola para solicitar una muestra nueva. Si falta la
+configuración, la UI muestra un error discreto y permite reintentar con el enlace.
 
 ## 3. Instalación futura en Ubuntu, SIN iniciar ni habilitar
 
@@ -183,19 +190,19 @@ En otra ventana:
 1. Abrir https://test-enet-versions-sralcer.eden-rooms.pages.dev/.
 2. Desplegar la sala cuyo versionsRoomId sea sala-prueba-20668. Debe seguir en el
    lobby público y coincidir por endpoint; no se crean salas offline desde D1.
-3. Cada apertura envía un POST, aunque ya haya una muestra de menos de 120 s.
+3. Abrir/reabrir no envía POST. Solo pulsar Consultar versiones lo envía.
    Solo se reutiliza un trabajo PENDIENTE o EN EJECUCIÓN de otro visitante.
 4. Ver «Consultando versiones…» y en Network un POST versiones-consultar que solo
    contiene sala_id, seguido por GET de estado. No debe haber peticiones del
    navegador a /api/collector/jobs ni cabeceras con claves.
 5. Al terminar el worker aparece la versión sin recargar. Comparar con
    /api/versiones-sala?id=sala-prueba-20668. Varios visitantes simultáneos comparten
-   el mismo trabajo activo. Una apertura posterior a su finalización puede crear otro.
+   el mismo trabajo activo. Otro clic manual posterior a su finalización puede crear otro.
 6. Mantener la tarjeta abierta diez minutos: no debe haber nuevos POST de
-   versiones-consultar. Tras 120 s o varias horas siguen visibles los jugadores, versiones y hora originales.
-   Cerrar/reabrir genera una nueva solicitud incluso antes de vencer esos 120 s.
+   versiones-consultar. Tras 120 s o varias horas las versiones y hora originales siguen visibles para jugadores que continúan presentes.
+   El enlace permite otra consulta; cerrar/reabrir no la inicia.
 7. Detener el worker con Ctrl+C. La espera termina como máximo a los 45 s con un
-   mensaje discreto que pide cerrar/reabrir. Esperar el cooldown de servidor antes
+   mensaje discreto que permite reintentar con Consultar versiones. Esperar el cooldown de servidor antes
    de hacerlo; dejar abierta la tarjeta no vuelve a solicitar trabajo.
 
 Los logs HTTP conservan código, detalle acotado y CF-Ray si Cloudflare rechaza
@@ -231,7 +238,7 @@ sudo systemctl disable --now eden-rooms-on-demand.service
 
 KillMode=control-group y un límite de parada de 30 s evitan dejar clientes ENet
 huérfanos. Las asignaciones pendientes vencen y la API deja de entregar muestras al cumplir
-120 s; las copias ya aceptadas por tarjetas abiertas siguen visibles hasta cerrarlas. No borrar tablas para detenerlo. Para deshabilitar también la creación de
+120 s; las versiones locales conocidas siguen visibles para identidades que continúan presentes. No borrar tablas para detenerlo. Para deshabilitar también la creación de
 trabajos, cambiar ENET_JOBS_ENABLED a false solo en Preview y desplegar Preview.
 
 No usar a la vez el temporizador/recolector periódico antiguo y el worker bajo

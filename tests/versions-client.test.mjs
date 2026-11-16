@@ -21,7 +21,7 @@ test('unavailable, cross-room, endpoint mismatch, stale and boundary timestamps 
     {...snapshot,consultado_en:new Date(now-120000).toISOString()},
     {...snapshot,consultado_en:new Date(now+31000).toISOString()}]){
     const p=applyRoomSnapshot(room,data,now).players[0];assert.equal(p.gameVersion,undefined);
-    const html=playerListMarkup([p]);assert.ok(html.includes('Mario Kart 8 Deluxe'));assert.ok(!html.includes('player-version'));
+    const html=playerListMarkup([p]);assert.ok(html.includes('Mario Kart 8 Deluxe'));assert.ok(!html.includes('class="player-version"'));
   }
 });
 test('homonyms match by name plus virtual IP; uncertain or conflicting matches are omitted',()=>{
@@ -52,136 +52,99 @@ test('upstream numeric 64-bit IDs remain exact before matching',()=>{
 });
 
 
-test('only an explicit opening enqueues once; TTL and repeated refreshes never repeat work',async()=>{
-  let clock=now;const requests=[];
+test('opening, refreshing, closing and reopening never enqueue; manual click does',async()=>{
+  let calls=0,clock=now;
+  const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
   const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    requests.push({url,options});
-    return Response.json(options.method==='POST'?{sala_id:room.versionsRoomId,estado:'listo'}:snapshot);
+    calls++;return Response.json(options.method==='POST'?{estado:'listo'}:{...snapshot,consultado_en:new Date(clock).toISOString()});
   }});
-  await client.refresh([room]);assert.equal(requests.length,0);
-  await Promise.all([client.open(room),client.open(room)]);
-  assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
-  assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
-  for(let i=1;i<=10;i++){
-    clock=now+i*60000;await client.refresh([room]);await client.open(room);client.retain([room]);
+  client.open(current);await client.refresh([current]);assert.equal(calls,0);
+  await Promise.all([client.query(current),client.query(current)]);assert.equal(calls,2);
+  assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
+  clock+=8*3600000;client.retain([current]);await client.refresh([current]);
+  assert.ok(playerListMarkup(client.decorate(current).players).includes('Versión 4.0.1'));
+  assert.equal(client.status(current).consultedAt,snapshot.consultado_en);
+  client.close();client.open(current);await client.refresh([current]);assert.equal(calls,2);
+  assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
+  await client.query(current);assert.equal(calls,4);
+  assert.equal(client.status(current).consultedAt,new Date(clock).toISOString());
+});
+test('directory roster remains live without manual queries',async()=>{
+  let calls=0;const client=createVersionsClient({fetcher:async()=>{calls++;throw Error();}});
+  client.open(room);
+  const next={...room,players:[{nickname:'New',gameName:'Game'}]};
+  client.retain([next]);await client.refresh([next]);
+  assert.deepEqual(client.decorate(next).players,next.players);assert.equal(calls,0);
+  assert.match(playerListMarkup(next.players),/Versión sin consultar/);
+});
+test('versions require unique name/IP, current game/title and uninterrupted presence',async()=>{
+  const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
+  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:snapshot)});
+  await client.query(current);
+  for(const changed of [{...player}, {...player,virtual_ip:'10.166.1.2'},
+    {...current.players[0],gameName:'Other'}, {...current.players[0],gameId:'1'}]){
+    assert.equal(client.decorate({...room,players:[changed]}).players[0].gameVersion,undefined);
   }
-  client.abort();await client.refresh([room]);
-  assert.equal(requests.length,2,'only opening POST and final snapshot GET are allowed');
-  assert.equal(client.decorate(room).players[0].gameVersion,'4.0.1');
-  assert.equal(client.status(room).consultedAt,snapshot.consultado_en);
-  assert.match(client.status(room).text,/^Versiones consultadas a las \d{2}:\d{2}$/);
-  assert.equal(client.nextExpiry(),null);
+  assert.ok(client.decorate({...current,players:[current.players[0],current.players[0]]}).players.every(p=>!p.gameVersion));
+  const next={...current,players:[...current.players,{nickname:'New',gameName:player.gameName,virtual_ip:'10.166.1.2'}]};
+  client.retain([next]);assert.equal(client.decorate(next).players.length,2);
+  assert.equal(client.decorate(next).players[0].gameVersion,'4.0.1');
+  assert.equal(client.decorate(next).players[1].gameVersion,undefined);
+  client.retain([{...current,players:[]}]);assert.equal(client.decorate({...current,players:[]}).players.length,0);
+  client.retain([current]);assert.equal(client.decorate(current).players[0].gameVersion,undefined,'returning identity needs manual refresh');
+  assert.equal(client.decorate({...current,versionsRoomId:'other'}).players[0].gameVersion,undefined);
+  await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
 });
-test('closing and reopening enqueues again even with a snapshot younger than 120s',async()=>{
-  let clock=now,posts=0;
+test('pending status GETs never enqueue, duplicate clicks share work, timeout allows manual retry',async()=>{
+  let clock=now,posts=0,gets=0;
   const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    if(options.method==='POST'){posts++;return Response.json({sala_id:room.versionsRoomId,estado:'listo'});}
-    return Response.json(snapshot);
+    if(options.method==='POST')posts++;else gets++;
+    return Response.json({estado:'pendiente',espera_ms:45000});
   }});
-  await client.open(room);assert.equal(posts,1);
-  clock+=1000;client.close(room.versionsRoomId);await client.refresh([room]);assert.equal(posts,1);
-  await client.open(room);assert.equal(posts,2);
-  await client.refresh([room]);assert.equal(posts,2);
+  await client.query(room);await client.query(room);assert.equal(posts,1);
+  clock+=2000;await client.refresh([room]);assert.equal(gets,1);
+  clock+=45000;await client.refresh([room]);assert.match(client.status(room).text,/Pulsá Consultar/);
+  clock+=600000;await client.refresh([room]);assert.equal(posts,1);
+  await client.query(room);assert.equal(posts,2);
 });
-test('pending status GETs never enqueue; completion stops all version polling',async()=>{
-  let clock=now,ready=false;const requests=[];
-  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    requests.push({url,options});
-    if(options.method==='POST'){
-      assert.deepEqual(JSON.parse(options.body),{sala_id:room.versionsRoomId});
-      assert.equal(options.headers['X-API-Key'],undefined);assert.equal(options.headers['X-Collector-Key'],undefined);
-      return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000},{status:202});
-    }
-    if(url.startsWith('/api/versiones-sala'))return Response.json(snapshot);
-    return Response.json({sala_id:room.versionsRoomId,estado:ready?'listo':'consultando',espera_ms:43000});
-  }});
-  await client.open(room);await client.refresh([room]);assert.equal(requests.length,1);
-  clock+=2000;await client.refresh([room]);assert.equal(requests.length,2);
-  ready=true;clock+=2000;await client.refresh([room]);assert.equal(requests.length,4);
-  assert.equal(client.status(room).consultedAt,snapshot.consultado_en);
-  for(let i=0;i<10;i++){clock+=60000;await client.refresh([room]);}
-  assert.equal(requests.length,4);assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
-  assert.ok(requests.every(r=>!r.url.startsWith('/api/collector')));
-});
-test('offline timeout requires closing and reopening, not automatic retries while open',async()=>{
-  let clock=now,posts=0;
-  const client=createVersionsClient({now:()=>clock,fetcher:async()=>{posts++;return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000});}});
-  await client.open(room);assert.equal(posts,1);
-  clock+=45000;await client.refresh([room]);assert.equal(posts,1);
-  assert.ok(client.status(room.versionsRoomId).text.includes('Cerrá y volvé a abrir'));
-  clock+=300000;await client.refresh([room]);await client.open(room);assert.equal(posts,1);
-  client.close();await client.open(room);assert.equal(posts,2);
-});
-test('a late response from a closed opening cannot overwrite the reopened card',async()=>{
-  const deferred=[];let calls=0;
+test('late closed query cannot overwrite a manually retried result',async()=>{
+  const deferred=[];let snapshotReads=0;
   const client=createVersionsClient({now:()=>now,fetcher:(url,options)=>{
-    calls++;assert.equal(options.method,'POST');
-    return new Promise(resolve=>deferred.push(resolve));
+    if(options.method==='POST')return new Promise(resolve=>deferred.push(resolve));
+    snapshotReads++;return Promise.resolve(Response.json(snapshot));
   }});
-  const first=client.open(room);client.close();const second=client.open(room);
-  deferred[1](Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000}));await second;
-  deferred[0](Response.json({sala_id:room.versionsRoomId,estado:'listo'}));await first;
-  assert.equal(calls,2);assert.equal(client.status(room.versionsRoomId).text,'Consultando versiones…');
-  await client.refresh([room]);assert.equal(calls,2);
+  const first=client.query(room);client.close();client.open(room);
+  const second=client.query(room);
+  deferred[1](Response.json({estado:'pendiente',espera_ms:45000}));await second;
+  deferred[0](Response.json({estado:'listo'}));await first;
+  assert.equal(snapshotReads,0);assert.equal(client.status(room).text,'Consultando versiones…');
 });
-test('lost POST acknowledgement or tab pause never causes a second POST in that opening',async()=>{
-  let posts=0;
-  const client=createVersionsClient({now:()=>now,fetcher:(url,options)=>{
-    posts++;
-    return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('paused','AbortError'))));
-  }});
-  const pending=client.open(room);client.abort();await pending;
-  await client.refresh([room]);await client.open(room);assert.equal(posts,1);
-  assert.ok(client.status(room.versionsRoomId).text.includes('Cerrá y volvé a abrir'));
+test('expired, cross-room and wrong endpoint responses cannot be accepted',async()=>{
+  for(const invalid of [{...snapshot,consultado_en:new Date(now-120000).toISOString()},
+    {...snapshot,sala_id:'other'},{...snapshot,endpoint:{direccion:'other.test',puerto:20668}}]){
+    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:invalid)});
+    await client.query(room);assert.match(client.status(room).text,/No se pudieron/);
+    assert.equal(client.decorate(room).players[0].gameVersion,undefined);
+  }
 });
-test('unregistered rooms never enqueue; registered empty rooms still query once on opening',async()=>{
-  let calls=0;
-  const client=createVersionsClient({now:()=>now,fetcher:async()=>{calls++;return Response.json({sala_id:room.versionsRoomId,estado:'pendiente',espera_ms:45000});}});
-  await client.open({...room,versionsRoomId:undefined});assert.equal(calls,0);
-  await client.open({...room,players:[]});await client.refresh([room]);assert.equal(calls,1);
+test('unregistered rooms cannot query, including temporary missing registration metadata',async()=>{
+  let calls=0;const client=createVersionsClient({fetcher:async()=>{calls++;return Response.json({estado:'pendiente',espera_ms:45000});}});
+  await client.query({...room,versionsRoomId:undefined});assert.equal(calls,0);
+  await client.query(room);await client.query({...room,versionsRoomId:undefined});assert.equal(calls,1);
 });
 
-test('card owns the queried roster for hours despite lobby changes or missing metadata',async()=>{
-  let clock=now,calls=0;
-  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    calls++;return Response.json(options.method==='POST'?{sala_id:room.versionsRoomId,estado:'listo'}:snapshot);
+test('lost POST acknowledgement never retries automatically, including card reopen',async()=>{
+  let posts=0;
+  const client=createVersionsClient({fetcher:(url,options)=>{
+    posts++;return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('paused','AbortError'))));
   }});
-  await client.open(room);
-  const queried=client.decorate(room).players;
-  clock+=8*3600000;
-  const refreshed={...room,versionsRoomId:undefined,players:[{nickname:'New player',gameName:'Another game'}]};
-  client.retain([refreshed]);await client.refresh([refreshed]);
-  assert.equal(client.decorate(refreshed).players,queried);
-  assert.ok(playerListMarkup(queried).includes('Versión 4.0.1'));
-  assert.equal(queried[0].gameTitleId,observation.title_id);
-  assert.equal(client.status(refreshed).consultedAt,snapshot.consultado_en);
-  assert.equal(calls,2);
-  assert.equal(client.decorate({...room,versionsRoomId:'another'}).players[0].gameVersion,undefined);
-  assert.equal(client.decorate({...room,address:'another.test'}).players[0].gameVersion,undefined);
-  client.close();assert.equal(client.decorate(room).players[0].gameVersion,undefined);
-  assert.equal(client.status(room),null);
+  const pending=client.query(room);client.abort();await pending;
+  client.close();client.open(room);await client.refresh([room]);assert.equal(posts,1);
 });
-test('reopening discards the previous display and replaces roster, version and query time',async()=>{
-  let clock=now,resolvePost;
-  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    if(options.method==='POST')return new Promise(resolve=>resolvePost=resolve);
-    return Response.json({...snapshot,consultado_en:new Date(clock).toISOString(),jugadores:[{...observation,version:clock===now?'4.0.1':'4.0.2'}]});
-  }});
-  let opening=client.open(room);resolvePost(Response.json({estado:'listo'}));await opening;
-  client.close();clock+=8*3600000;
-  opening=client.open(room);
-  assert.equal(client.decorate(room).players[0].gameVersion,undefined);
-  assert.equal(client.status(room).text,'Consultando versiones…');
-  resolvePost(Response.json({estado:'listo'}));await opening;
-  assert.equal(client.decorate(room).players[0].gameVersion,'4.0.2');
-  assert.equal(client.status(room).consultedAt,new Date(clock).toISOString());
-});
-test('expired, cross-room or wrong endpoint responses cannot become pinned results',async()=>{
-  for(const invalid of [{...snapshot,consultado_en:new Date(now-120000).toISOString()},
-    {...snapshot,sala_id:'other'}, {...snapshot,endpoint:{direccion:'other.test',puerto:20668}}]){
-    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:invalid)});
-    await client.open(room);
-    assert.equal(client.decorate(room).players[0].gameVersion,undefined);
-    assert.match(client.status(room).text,/No se pudieron/);
+test('missing or ambiguous snapshot IP cannot be assigned even to a unique lobby name',async()=>{
+  const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
+  for(const jugadores of [[{...observation,virtual_ip:undefined}], [observation,{...observation,virtual_ip:'invalid'}]]){
+    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:{...snapshot,jugadores})});
+    await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,undefined);
   }
 });

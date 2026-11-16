@@ -38,7 +38,7 @@ export function playerListMarkup(players) {
     const game = String(player.gameName || '').trim(), version = game ? playerGameVersion(player) : '';
     return '<div class="player-row"><span class="player-name">👤 ' + escapeHTML(player.nickname || 'Sin nombre') + '</span><span class="player-details">'
       + (game ? '<span class="player-game">' + escapeHTML(game) + '</span>' : '')
-      + (version ? '<span class="player-version">Versión ' + escapeHTML(version) + '</span>' : '') + '</span></div>';
+      + (version ? '<span class="player-version">Versión ' + escapeHTML(version) + '</span>' : '<span class="player-version-unknown">Versión sin consultar</span>') + '</span></div>';
   }).join('');
 }
 export function mergeVersionPlayers(players, observations, {observedAt, now = Date.now()} = {}) {
@@ -79,15 +79,15 @@ export function applyRoomSnapshot(room, snapshot, now = Date.now()) {
   if (snapshot.endpoint && (snapshot.endpoint.direccion !== room.address || Number(snapshot.endpoint.puerto) !== Number(room.port))) return clean;
   return {...clean, players: mergeVersionPlayers(players, snapshot.jugadores, {observedAt: snapshot.consultado_en, now})};
 }
-// Only a freshly accepted API result can become a card-owned display snapshot.
-// Its source tag is local UI state; it is never sent to D1 or trusted by the API.
-function pinSnapshot(snapshot, now) {
-  const observations = snapshot.jugadores.filter(p => p && typeof p.nombre === 'string' && p.nombre
-    && typeof p.juego === 'string');
-  const players = observations.map(p => ({nickname:p.nombre, gameName:p.juego,
-    ...(p.virtual_ip !== undefined ? {virtual_ip:p.virtual_ip} : {})}));
-  return Object.freeze(mergeVersionPlayers(players, observations, {observedAt:snapshot.consultado_en, now})
-    .map(player => Object.freeze(player.gameVersionSource === 'enet' ? {...player, gameVersionSource:'enet-card'} : {...player})));
+// Identity is scoped to a room and uninterrupted presence in directory samples.
+// Names alone cannot establish continuity across independent ENet observations.
+function identity(player) {
+  const ip = virtualIp(player);
+  return player?.nickname && ip ? JSON.stringify([player.nickname, ip, player.gameName, String(player.gameId ?? '')]) : null;
+}
+function identities(players) {
+  const keys = (players || []).map(identity).filter(Boolean);
+  return new Set(keys.filter(key => keys.filter(k => k === key).length === 1));
 }
 function queryTime(timestamp) {
   return new Intl.DateTimeFormat('es', {hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(new Date(timestamp));
@@ -132,9 +132,9 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
         const snapshot = data?.sala_id === id && data.disponible === true && Array.isArray(data.jugadores)
           && snapshotFresh(data.consultado_en, now())
           && (!data.endpoint || data.endpoint.direccion === entry.address && Number(data.endpoint.puerto) === entry.port) ? data : null;
-        update(entry, {snapshot});
+        if (!entry.open || entries.get(id) !== entry) return false;
         if (snapshot) {
-          update(entry, {pinned:pinSnapshot(snapshot, now()), phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
+          update(entry, {snapshot, phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
           return true;
         }
         return false;
@@ -169,17 +169,32 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
   return {
     open(room) {
       const id = room?.versionsRoomId;
-      if (!roomIdValid(id)) return Promise.resolve();
-      if (!entries.get(id)?.open) {
-        entries.set(id, {id, address:room.address, port:Number(room.port), open:true, started:false, snapshot:null, pinned:null, nextFetch:0, pending:null,
-          phase:'idle', jobActive:false, deadline:null});
+      if (!roomIdValid(id)) return;
+      let entry = entryFor(room);
+      if (!entry || entry.address !== room.address || entry.port !== Number(room.port)) {
+        entry = {id, address:room.address, port:Number(room.port), started:true, snapshot:null,
+          nextFetch:Infinity, pending:null, phase:'idle', jobActive:false, deadline:null, eligible:new Set()};
+        entries.set(id, entry);
       }
-      return fetchRoom(id);
+      entry.open = true;
+    },
+    query(room) {
+      if (!roomIdValid(room?.versionsRoomId)) return Promise.resolve();
+      this.open(room);
+      const previous = entryFor(room);
+      if (!previous?.open) return Promise.resolve();
+      if (previous.pending || previous.jobActive && now() < previous.deadline) return previous.pending || Promise.resolve();
+      // Only a manual click can reset the POST latch; concurrent clicks share it.
+      previous.controller?.abort();
+      entries.set(previous.id, {...previous, started:false, pending:null, controller:null,
+        phase:'idle', snapshot:null, jobActive:false, deadline:null, nextFetch:0, eligible:identities(room.players)});
+      return fetchRoom(previous.id);
     },
     close(id) {
       for (const [key, entry] of entries) if (id === undefined || key === id) {
         entry.open = false; entry.paused = true; entry.controller?.abort();
-        entry.snapshot = null; entry.pinned = null;
+        if (entry.jobActive || entry.pending) failed(entry);
+        entry.pending = null;
       }
     },
     async refresh(rooms) {
@@ -188,16 +203,24 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     },
     decorate(room) {
       const entry = entryFor(room);
-      if (entry?.open && entry.pinned && entry.address === room.address && entry.port === Number(room.port)) {
-        return {...room, players:entry.pinned};
-      }
-      return applyRoomSnapshot(room, null, now());
+      const clean = applyRoomSnapshot(room, null, now());
+      if (!entry?.snapshot || entry.address !== room.address || entry.port !== Number(room.port)) return clean;
+      // Filter by uninterrupted directory identity before matching the historical sample.
+      const observations = entry.snapshot.jugadores;
+      const mergedPlayers = mergeVersionPlayers(clean.players || [], observations);
+      return {...clean, players:(clean.players || []).map((player, index) => {
+        if (!entry.eligible.has(identity(player)) || !observations.some(o => o?.nombre === player.nickname
+          && virtualIp(o) && virtualIp(o) === virtualIp(player))) return player;
+        const merged = mergedPlayers[index];
+        return merged?.gameVersion && merged !== player
+          ? {...merged, gameVersionSource:'enet-card', gameVersionObservedAt:entry.snapshot.consultado_en} : player;
+      })};
     },
     status(roomOrId) {
       const entry = entryFor(roomOrId);
       if (!entry?.open || entry.phase === 'idle') return null;
       if (entry.phase === 'ready') return {text:'Versiones consultadas a las ' + queryTime(entry.snapshot.consultado_en), consultedAt:entry.snapshot.consultado_en, retry:false};
-      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones. Cerrá y volvé a abrir la sala para reintentar.', retry:false};
+      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones. Pulsá Consultar versiones para reintentar.', retry:false};
       return {text:'Consultando versiones…', retry:false};
     },
     nextExpiry() {
@@ -211,6 +234,11 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       for (const [id, entry] of entries) {
         const sameRoom = rooms.some(room => room.address === entry.address && Number(room.port) === entry.port
           && (!roomIdValid(room.versionsRoomId) || room.versionsRoomId === id));
+        const current = rooms.find(room => room.address === entry.address && Number(room.port) === entry.port);
+        if (current) {
+          const present = identities(current.players);
+          entry.eligible = new Set([...entry.eligible].filter(key => present.has(key)));
+        }
         if (!sameRoom) { entry.open = false; entry.paused = true; entry.controller?.abort(); entries.delete(id); }
       }
     },

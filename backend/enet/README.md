@@ -182,23 +182,16 @@ Un HTTP 200 con index.html no confirma que exista ninguna de esas Functions.
 consulta de versiones-sala, caché de 30 s, caducidad de 120 s y verificaciones
 de escritorio/móvil. No se ha activado ningún servicio automático de Ubuntu.
 
-## Consultas bajo demanda (etapa actual)
+## Consultas manuales bajo demanda (etapa actual)
 
-La propuesta actual reemplaza el sondeo periódico de salas por trabajos de
-Preview, creados al abrir una tarjeta. Ver [ON_DEMAND.md](ON_DEMAND.md) para la
-migración de eden-rooms-test-db, la configuración y comandos de instalación
-sin activar el servicio. El worker reutiliza collector.py y client.c; no expone
-un servidor en Ubuntu. Cada apertura envía un único POST, sin renovación automática mientras siga
-abierta. El TTL de 120 s sigue aplicándose en D1/API; una tarjeta abierta conserva su
-copia de jugadores y versiones con la hora original, sin vencimiento visual. Cerrar/reabrir permite
-una consulta nueva. Se consulta estado cada 2 s únicamente mientras se espera
-un trabajo. El timer anterior queda
-como referencia y no debe ejecutarse junto al nuevo servicio.
+La lista de jugadores del directorio se actualiza cada 10 s independientemente
+de las versiones. Abrir o reabrir tarjetas no inicia ENet. Solo el enlace
+«↻ Consultar versiones» envía un POST; GET cada 2 s sigue únicamente el trabajo
+pendiente. No ejecutar el temporizador periódico antiguo junto al worker.
 
-## Una solicitud por apertura
-
-La web inicia trabajos únicamente desde el evento de abrir la tarjeta. Los
-refrescos del lobby, el vencimiento de los 120 s y volver a la pestaña no
-encolan trabajo. Cloudflare comparte trabajos activos, pero ya no usa una
-muestra reciente para omitir el POST de una nueva apertura. El servicio Ubuntu
-ondemand sigue compatible y sin cambios; no requiere reinstalación ni migración.
+Las versiones aceptadas no vencen visualmente y muestran su hora original.
+Se aplican a identidades actuales seguras (nombre/IP virtual, juego y Title ID),
+sin fijar el listado antiguo ni atribuir versiones a jugadores nuevos. D1/API
+conservan 120 s. Ver [PREVIEW_VERSIONS.md](PREVIEW_VERSIONS.md) para limitaciones
+y [ON_DEMAND.md](ON_DEMAND.md) para instalación previa. Esta etapa no necesita
+migraciones ni modificar/reiniciar el servicio Ubuntu.

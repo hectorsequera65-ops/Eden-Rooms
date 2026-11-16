@@ -24,14 +24,14 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       page.on('pageerror',error=>errors.push(error.message));
       await page.clock.install({time:new Date(now)});
       const mario='Mario Kart 8 Deluxe',smash='Super Smash Bros. Ultimate';
-      const players=[{nickname:'Eden',gameName:mario},{nickname:'SataHT',gameName:smash},
+      const players=[{nickname:'Eden',gameName:mario,fakeIp:'10.0.0.10'},{nickname:'SataHT',gameName:smash,fakeIp:'10.0.0.11'},
         {nickname:'SinVersion',gameName:mario},{nickname:'Repetido',gameName:smash,fakeIp:'10.0.0.1'},
         {nickname:'Repetido',gameName:smash,fakeIp:'10.0.0.2'}];
       const rooms=[{name:'Sala Preview 20668',address:'room.test',port:20668,maxPlayers:32,preferredGameName:smash,players,versionsRoomId:'sala-prueba-20668'},
         {name:'Otra sala',address:'other.test',port:6007,maxPlayers:32,preferredGameName:mario,players:[players[0]],versionsRoomId:'other'}];
       const snapshot={disponible:true,sala_id:'sala-prueba-20668',consultado_en:new Date(now).toISOString(),jugadores:[
-        {nombre:'Eden',juego:mario,version:'4.0.1',title_id:'0100152000022000'},
-        {nombre:'SataHT',juego:smash,version:'13.0.5',title_id:'01006A800016E000'},
+        {nombre:'Eden',juego:mario,virtual_ip:'10.0.0.10',version:'4.0.1',title_id:'0100152000022000'},
+        {nombre:'SataHT',juego:smash,virtual_ip:'10.0.0.11',version:'13.0.5',title_id:'01006A800016E000'},
         {nombre:'SinVersion',juego:mario,version:''},
         {nombre:'Repetido',juego:smash,virtual_ip:'10.0.0.1',version:'13.0.2'},
         {nombre:'Repetido',juego:smash,virtual_ip:'10.0.0.2',version:'13.0.3'}]};
@@ -54,12 +54,21 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('.room-accordion')).toHaveCount(2);
       assert.equal(requests.length,0,'collapsed rooms should not request versions');
       await page.locator('[data-room-toggle="room.test:20668"]').click();
+      assert.equal(openingRequests.length,0);
+      rooms[0].players=[...players,{nickname:'Temporal',gameName:mario}];
+      await page.clock.fastForward(10001);
+      await expect(page.locator('.room-open .room-summary')).toContainText('6/32');
+      rooms[0].players=players;
+      await page.clock.fastForward(10001);
+      await expect(page.locator('.room-open .room-summary')).toContainText('5/32');
+      assert.equal(openingRequests.length,0);
+      await page.locator('.room-open [data-query-versions]').click();
       await expect(page.locator('.room-open .player-version')).toHaveCount(3);
       await page.locator('.room-open [data-expand]').click();
       await expect(page.locator('.room-open .player-version')).toHaveCount(4);
       const eden=page.locator('.room-open .player-row').filter({hasText:'Eden'});
       await expect(eden).toContainText('Versión 4.0.1');
-      await expect(page.locator('.room-open .player-row').filter({hasText:'SinVersion'})).not.toContainText('Versión');
+      await expect(page.locator('.room-open .player-row').filter({hasText:'SinVersion'})).toContainText('Versión sin consultar');
       await expect(page.locator('.room-open .player-row').filter({hasText:'Repetido'})).toHaveCount(2);
       assert.equal(requests.length,1);
       await page.locator('[data-favorite="room.test:20668"]').click();
@@ -73,6 +82,8 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('html')).toHaveClass(/light/);
       await page.locator('[data-room-toggle="room.test:20668"]').click();
       await page.locator('[data-room-toggle="room.test:20668"]').click();
+      assert.equal(openingRequests.length,1);
+      await page.locator('.room-open [data-query-versions]').click();
       await expect.poll(()=>openingRequests.length).toBe(2);
       await expect.poll(()=>requests.length).toBe(2);
       await page.clock.fastForward(31000);
@@ -84,10 +95,15 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('.version-request-status time')).toHaveText('Versiones consultadas a las 14:14');
       rooms[0].players=[{nickname:'Nuevo',gameName:smash}];
       await page.clock.fastForward(8*3600000);
-      await expect(eden).toContainText('Versión 4.0.1');
+      await expect(eden).toHaveCount(0);
+      await expect(page.locator('.room-open .player-row')).toHaveCount(1);
+      await expect(page.locator('.room-open .player-row')).toContainText('Nuevo');
+      await expect(page.locator('.room-open .room-summary')).toContainText('1/32');
       await expect(page.locator('.version-request-status time')).toHaveAttribute('datetime',snapshot.consultado_en);
       assert.equal(openingRequests.length,2,'expiry must never trigger another ENet request');
       await page.locator('[data-room-toggle="other.test:6007"]').click();
+      assert.ok(!requests.includes('other'));
+      await page.locator('.room-open [data-query-versions]').click();
       await expect.poll(()=>requests.includes('other')).toBe(true);
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
       assert.deepEqual(errors,[],'page must have no JavaScript errors');
@@ -117,8 +133,8 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.route('**/api/**',async route=>{
         const request=route.request(),url=new URL(request.url());
         if(url.pathname.startsWith('/api/collector'))privateRequests++;
-        if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms:[{name:'Preview bajo demanda',address:'69.24.117.72',port:20668,maxPlayers:32,preferredGameName:game,versionsRoomId:id,players:[{nickname:'Eden',gameName:game}]}]}});
-        if(url.pathname==='/api/versiones-sala')return route.fulfill({json:ready?{disponible:true,sala_id:id,consultado_en:new Date(now+4000).toISOString(),jugadores:[{nombre:'Eden',juego:game,title_id:'01006A800016E000',version:'13.0.5'}]}:{disponible:false,sala_id:id,jugadores:[]}});
+        if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms:[{name:'Preview bajo demanda',address:'69.24.117.72',port:20668,maxPlayers:32,preferredGameName:game,versionsRoomId:id,players:[{nickname:'Eden',gameName:game,virtual_ip:'10.0.0.10'}]}]}});
+        if(url.pathname==='/api/versiones-sala')return route.fulfill({json:ready?{disponible:true,sala_id:id,consultado_en:new Date(now+4000).toISOString(),jugadores:[{nombre:'Eden',juego:game,virtual_ip:'10.0.0.10',title_id:'01006A800016E000',version:'13.0.5'}]}:{disponible:false,sala_id:id,jugadores:[]}});
         if(url.pathname==='/api/versiones-consultar'){
           if(request.method()==='POST'){
             queued++;assert.deepEqual(request.postDataJSON(),{sala_id:id});
@@ -134,6 +150,8 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       });
       await page.goto(`http://127.0.0.1:${server.address().port}/`);
       await page.locator('[data-room-toggle]').click();
+      assert.equal(queued,0);
+      await page.locator('.room-open [data-query-versions]').click();
       await expect(page.locator('.version-request-status')).toContainText('Consultando versiones…');
       await expect.poll(()=>queued).toBe(1);
       assert.equal(queued,1);
@@ -146,17 +164,21 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('.version-request-status time')).toContainText('Versiones consultadas a las');
       const nextOpening=page.waitForResponse(response=>response.url().endsWith('/api/versiones-consultar')&&response.request().method()==='POST');
       await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
+      assert.equal(queued,1);
+      await page.locator('.room-open [data-query-versions]').click();
       const accepted=await nextOpening;await accepted.finished();
       await page.evaluate(()=>document.readyState); // Let the accepted response's JSON microtasks settle before advancing the clock.
       await expect.poll(()=>queued).toBe(2);
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
       await page.clock.fastForward(45001);
       await expect(page.locator('.version-request-status')).toContainText('No se pudieron consultar las versiones.');
-      await expect(page.locator('.version-request-status')).toContainText('Cerrá y volvé a abrir');
+      await expect(page.locator('.version-request-status')).toContainText('Pulsá Consultar versiones');
       await expect(page.getByRole('button',{name:'Reintentar',exact:true})).toHaveCount(0);
       await page.clock.fastForward(60001);
       assert.equal(queued,2,'an error must not restart work while the card remains open');
       await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
+      assert.equal(queued,2);
+      await page.locator('.room-open [data-query-versions]').click();
       await expect.poll(()=>queued).toBe(3);
       assert.equal(privateRequests,0);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
