@@ -55,6 +55,8 @@ def api(base, path, payload=None, timeout=15):
             headers['X-API-Key'] = key
     if path == '/api/collector/jobs':
         headers['X-Collector-Key'] = os.environ['COLLECTOR_API_KEY']
+        if body is not None:
+            headers['Content-Type'] = 'application/json'
     elif body is not None:
         headers.update({'Content-Type': 'application/json',
                         'X-API-Key': os.environ['VERSIONES_API_KEY']})
