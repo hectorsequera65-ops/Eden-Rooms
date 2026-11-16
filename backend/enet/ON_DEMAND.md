@@ -7,19 +7,26 @@ que el propietario revise y pruebe únicamente Preview y eden-rooms-test-db.
 
 ## Recorrido
 
-1. Al abrir una sala ocupada y registrada, la web lee versiones-sala.
-2. Si no hay muestra vigente, POST /api/versiones-consultar con solo sala_id.
-3. Cloudflare verifica sala autorizada y endpoint público, reutiliza un trabajo
-   pendiente o crea uno. El navegador muestra «Consultando versiones…».
-4. job_worker.py retira un trabajo por HTTPS con una clave privada independiente.
-   Obtiene IP/puerto exclusivamente de Cloudflare y valida otra vez el destino.
-5. Reutiliza collector.collect, protocol.py y el binario de client.c. Conecta un
-   usuario sralcer durante como máximo ocho segundos normalmente, toma la última
-   instantánea válida y se desconecta. No anuncia un juego ficticio.
-6. La finalización autenticada guarda versiones_salas y marca el trabajo listo
-   en la misma transacción D1, usando el mismo normalizador que versiones-multiples.
-7. La página revisa el estado cada dos segundos mientras espera; al estar listo
-   lee versiones-sala y actualiza la tarjeta sin recargar.
+1. Cada apertura explícita de una tarjeta registrada envía UNA solicitud POST
+   /api/versiones-consultar con solo sala_id, incluso si D1 conserva datos vigentes.
+2. Cloudflare verifica sala y endpoint. Si hay trabajo pendiente/en ejecución,
+   comparte ese trabajo; si no lo hay, crea uno respetando cola, cuotas y cooldown.
+3. La tarjeta muestra «Consultando versiones…». Reabrir puede pedir trabajo nuevo;
+   dejar la tarjeta abierta, actualizar el lobby o volver a la pestaña no lo hace.
+4. job_worker.py retira un trabajo autenticado por HTTPS, valida la IPv4 y su lista
+   local y reutiliza collector.collect, protocol.py y client.c como sralcer.
+5. La finalización guarda versiones y marca el trabajo listo en una transacción.
+6. Solo durante la espera, la web consulta estado por GET cada dos segundos.
+   Ese GET nunca crea trabajos. Al estar listo lee versiones-sala una vez y deja
+   de consultar versiones para esa apertura.
+7. A los 120 segundos se oculta la muestra vencida, SIN renovar ni crear un trabajo.
+   Para actualizar hay que cerrar y volver a abrir la tarjeta. Si hubo error, el
+   mensaje indica la misma acción; no hay reintento dentro de la apertura actual.
+
+Esta etapa no cambia el esquema, los secretos ni la API privada del worker.
+No requiere migración adicional ni reinstalar/reiniciar eden-rooms-on-demand.service.
+La migración/instalación de las secciones siguientes corresponde solo a la primera
+instalación. Si ya está configurado, basta actualizar el despliegue Preview.
 
 El sistema NO expone un servidor HTTP en Ubuntu. Todas sus conexiones HTTP son
 salientes hacia el Preview. El navegador nunca llama a la ruta privada ni recibe
@@ -27,7 +34,8 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
 
 ## Límites y seguridad
 
-- Resultados reutilizables hasta consultado_en + 120 segundos. La descarga no
+- Datos visibles hasta consultado_en + 120 segundos. Ese TTL no bloquea una
+  nueva apertura ni dispara consultas periódicas. La descarga no
   renueva la fecha. Una sala confirmada vacía es válida; un timeout no equivale
   a una sala vacía. Mantener reloj/NTP de Ubuntu sincronizado.
 - Un único trabajo por sala, incluso con peticiones concurrentes de visitantes.
@@ -39,8 +47,9 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
 - Espera máxima de 45 segundos; cada asignación tiene un token privado aleatorio
   y una lease de hasta 30 segundos. Un resultado vencido/repetido o de otro trabajo
   no puede escribir. La autorización y el endpoint se revisan de nuevo al terminar.
-- Tras error se exige reintento explícito y un pequeño plazo de 15 segundos;
-  la interfaz no reencola indefinidamente si Ubuntu está desconectado.
+- Tras error se exige cerrar/reabrir. Cloudflare conserva el cooldown de 15 s
+  y las cuotas: reapertura permite solicitar, pero no evita los límites de seguridad.
+  La interfaz no reencola indefinidamente si Ubuntu está desconectado.
 - El navegador solo envía sala_id; se rechazan direccion, puerto y otros campos.
   Los POST públicos exigen JSON, origen idéntico y body de hasta 512 bytes, leído
   con un límite de bytes. No se usan cabeceras User-Agent como autenticación.
@@ -102,8 +111,8 @@ Después de guardar esta configuración, desplegar/reintentar únicamente la ram
 Preview. Usar el alias canónico:
 https://test-enet-versions-sralcer.eden-rooms.pages.dev
 Los hosts por hash de deployment y dominios ajenos no están habilitados para la
-cola. La UI puede mostrar muestras existentes antes de habilitar la cola; si
-falta la configuración mostrará un error discreto y Reintentar.
+cola. Una apertura necesita la cola para solicitar una muestra nueva. Si falta la
+configuración, la UI muestra un error discreto con la indicación de cerrar/reabrir.
 
 ## 3. Instalación futura en Ubuntu, SIN iniciar ni habilitar
 
@@ -172,19 +181,20 @@ En otra ventana:
 1. Abrir https://test-enet-versions-sralcer.eden-rooms.pages.dev/.
 2. Desplegar la sala cuyo versionsRoomId sea sala-prueba-20668. Debe seguir en el
    lobby público y coincidir por endpoint; no se crean salas offline desde D1.
-3. Si ya hay una muestra de menos de 120 s se muestra directamente y no se crea
-   trabajo. Para probar la cola, esperar a que venza la muestra anterior.
+3. Cada apertura envía un POST, aunque ya haya una muestra de menos de 120 s.
+   Solo se reutiliza un trabajo PENDIENTE o EN EJECUCIÓN de otro visitante.
 4. Ver «Consultando versiones…» y en Network un POST versiones-consultar que solo
    contiene sala_id, seguido por GET de estado. No debe haber peticiones del
    navegador a /api/collector/jobs ni cabeceras con claves.
-5. Al terminar el worker, aparece la versión sin recargar. Comparar con
-   /api/versiones-sala?id=sala-prueba-20668. Otro visitante debe compartir el
-   resultado/trabajo, no iniciar un ENet adicional.
-6. Cerrar/reabrir una tarjeta con datos vigentes reutiliza la muestra. Al vencer
-   los 120 s se retira la versión; nunca se extiende la fecha por consultarla.
-7. Detener el worker con Ctrl+C. Una consulta sin datos debe terminar en un mensaje
-   discreto y Reintentar, como máximo a los 45 s. Después del plazo breve se puede
-   reintentar; no hay un bucle de solicitudes nuevas mientras Ubuntu esté offline.
+5. Al terminar el worker aparece la versión sin recargar. Comparar con
+   /api/versiones-sala?id=sala-prueba-20668. Varios visitantes simultáneos comparten
+   el mismo trabajo activo. Una apertura posterior a su finalización puede crear otro.
+6. Mantener la tarjeta abierta diez minutos: no debe haber nuevos POST de
+   versiones-consultar. A los 120 s se retira la versión sin iniciar otro trabajo.
+   Cerrar/reabrir genera una nueva solicitud incluso antes de vencer esos 120 s.
+7. Detener el worker con Ctrl+C. La espera termina como máximo a los 45 s con un
+   mensaje discreto que pide cerrar/reabrir. Esperar el cooldown de servidor antes
+   de hacerlo; dejar abierta la tarjeta no vuelve a solicitar trabajo.
 
 Los logs HTTP conservan código, detalle acotado y CF-Ray si Cloudflare rechaza
 al cliente. Un 404 puede indicar que no se habilitó la cola o que el host no es el
@@ -233,7 +243,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Las pruebas de cola ejecutan SQLite real en memoria: concurrencia/deduplicación,
-autenticación, límites, destinos privados, caducidad, tokens viejos, reintento y
+autenticación, límites, destinos privados, caducidad, tokens viejos, reapertura y
 transacción de resultado. Chromium comprueba escritorio/móvil, llegada asíncrona,
 mensaje de espera y Ubuntu offline con APIs simuladas locales. Python comprueba
 validación de IP/CIDRs, ausencia de claves en C, timeout externo y selección de la

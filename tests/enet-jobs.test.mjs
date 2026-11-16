@@ -57,7 +57,7 @@ test('global atomic leases cap concurrency at two; completion stores compatible 
     const stored=JSON.parse(c.sqlite.prepare('SELECT jugadores_json FROM versiones_salas WHERE sala_id=?').get(job.sala_id).jugadores_json);
     assert.equal(stored[0].version,'13.0.5');assert.equal(stored[0].title_id,'01006A800016E000');
     const data=await (await versions({env:c.env,request:c.request('/api/versiones-sala?id='+job.sala_id)})).json();assert.equal(data.disponible,true);
-    assert.equal((await (await c.ask(job.sala_id,now+1000)).json()).estado,'listo');
+    assert.equal((await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id='+job.sala_id)},now+1000)).json()).estado,'listo');
     assert.ok((await (await c.poll({action:'claim'},now+1000)).json()).trabajo);
   }finally{c.sqlite.close();}
 });
@@ -76,17 +76,36 @@ test('expired leases are fenced, bounded waits become retryable errors and old t
     assert.equal((await status.json()).estado,'error');
   }finally{c.sqlite.close();}
 });
-test('120-second cache avoids ENet jobs; endpoint changes and revoked authorization reject results',async()=>{
+test('fresh 120-second data does not suppress opening requests or hide a pending job',async()=>{
   const c=setup();try{
     const now=Date.now();c.sqlite.prepare('INSERT INTO versiones_salas VALUES (?,?,?,?)').run('smash','Smash','[]',new Date(now).toISOString());
-    assert.equal((await (await c.ask('smash',now+119999)).json()).estado,'listo');
-    assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM enet_version_jobs').get().n,0);
-    await c.ask('smash',now+120000);
-    const job=(await (await c.poll({action:'claim'},now+120000)).json()).trabajo;
+    assert.equal((await c.ask('smash',now+1000)).status,202);
+    assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM enet_version_jobs').get().n,1);
+    const state=await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+1001);
+    assert.equal((await state.json()).estado,'pendiente');
+    const job=(await (await c.poll({action:'claim'},now+1001)).json()).trabajo;
     c.sqlite.prepare('UPDATE salas_endpoints SET direccion=? WHERE sala_id=?').run('8.8.8.8','smash');
-    const completed={action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:snapshot(now+120000)};
-    assert.equal((await c.poll(completed,now+121000)).status,409);
-    c.sqlite.prepare('UPDATE salas_autorizadas SET autorizada=0').run();assert.equal((await c.ask('smash',now+121000)).status,403);
+    const completed={action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:snapshot(now+1001)};
+    assert.equal((await c.poll(completed,now+2000)).status,409);
+    c.sqlite.prepare('UPDATE salas_autorizadas SET autorizada=0').run();assert.equal((await c.ask('smash',now+2000)).status,403);
+  }finally{c.sqlite.close();}
+});
+test('reopening after completion creates a new job; status GETs alone never restart expired data',async()=>{
+  const c=setup();try{
+    const now=Date.now();await c.ask('smash',now);
+    const first=(await (await c.poll({action:'claim'},now)).json()).trabajo;
+    assert.equal((await c.poll({action:'complete',job_id:first.job_id,lease_token:first.lease_token,snapshot:snapshot(now)},now+1)).status,200);
+    assert.equal((await c.ask('smash',now+1000)).status,202);
+    const second=(await (await c.poll({action:'claim'},now+1000)).json()).trabajo;
+    assert.notEqual(second.job_id,first.job_id);
+    assert.equal((await c.ask('smash',now+1001)).status,202);
+    assert.equal(c.sqlite.prepare('SELECT job_id FROM enet_version_jobs').get().job_id,second.job_id);
+    assert.equal((await c.poll({action:'complete',job_id:second.job_id,lease_token:second.lease_token,snapshot:snapshot(now+1001)},now+1002)).status,200);
+    for(const elapsed of [1003,120000,240000,600000]){
+      await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+elapsed);
+      assert.equal(c.sqlite.prepare('SELECT status FROM enet_version_jobs').get().status,'done');
+      assert.equal((await (await c.poll({action:'claim'},now+elapsed)).json()).trabajo,null);
+    }
   }finally{c.sqlite.close();}
 });
 test('per-IP rate limits and global queue capacity bound abuse',async()=>{

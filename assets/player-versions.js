@@ -82,19 +82,22 @@ export function applyRoomSnapshot(room, snapshot, now = Date.now()) {
 export function createVersionsClient({fetcher = (...args) => fetch(...args), now = () => Date.now(), timeoutMs = 5000, onChange = () => {}} = {}) {
   const entries = new Map();
   function update(entry, patch) {
-    const changed = Object.keys(patch).some(key => ['snapshot','phase','deadline','retryAt'].includes(key) && entry[key] !== patch[key]);
+    const changed = Object.keys(patch).some(key => ['snapshot','phase','deadline'].includes(key) && entry[key] !== patch[key]);
     Object.assign(entry, patch);
-    if (changed) onChange();
+    if (changed && entry.open && entries.get(entry.id) === entry) onChange();
   }
-  function failed(entry, delay = 15000) {
-    update(entry, {phase:'error', jobActive:false, deadline:null, retryAt:now() + Math.max(0, Math.min(60000, delay)), nextFetch:Infinity});
+  function failed(entry) {
+    update(entry, {phase:'error', jobActive:false, deadline:null, nextFetch:Infinity});
   }
   async function fetchRoom(id) {
-    let entry = entries.get(id);
-    if (!entry) { entry = {snapshot:null, nextFetch:0, pending:null, phase:'idle', jobActive:false, deadline:null, retryAt:0}; entries.set(id, entry); }
+    const entry = entries.get(id);
+    if (!entry?.open) return;
     if (entry.pending) return entry.pending;
-    if (entry.jobActive && now() >= entry.deadline) { failed(entry); return; }
+    if (entry.started && !entry.jobActive) return; // An opening can enqueue only once.
+    if (entry.jobActive && entry.deadline !== null && now() >= entry.deadline) { failed(entry); return; }
     if (now() < entry.nextFetch) return;
+    const enqueue = !entry.started;
+    entry.started = true; // Latch before yielding, including lost/aborted POST responses.
     const controller = new AbortController(); entry.controller = controller; entry.paused = false;
     if (!entry.jobActive) update(entry, {phase:'loading'});
     entry.pending = (async () => {
@@ -109,29 +112,31 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
           && snapshotFresh(data.consultado_en, now()) ? data : null;
         update(entry, {snapshot});
         if (snapshot) {
-          update(entry, {phase:'ready', jobActive:false, deadline:null, nextFetch:Date.parse(snapshot.consultado_en) + VERSION_TTL_MS});
+          update(entry, {phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
           return true;
         }
         return false;
       }
       async function queueState(response) {
         const data = await response.json();
+        if (!entry.open || entries.get(id) !== entry) return;
         if ((!response.ok && response.status !== 429) || data?.sala_id && data.sala_id !== id) throw Error('Queue unavailable');
         if (data.estado === 'listo') {
+          entry.jobActive = true;
           if (!await readSnapshot()) throw Error('No fresh result');
         } else if (data.estado === 'pendiente' || data.estado === 'consultando') {
           const wait = Math.min(45000, Number(data.espera_ms));
           if (!Number.isFinite(wait) || wait <= 0) { failed(entry); return; }
           const deadline = Math.min(entry.deadline ?? Infinity, now() + wait);
           update(entry, {phase:'loading', jobActive:true, deadline, nextFetch:now() + VERSION_POLL_MS});
-        } else if (data.estado === 'error' || response.status === 429) failed(entry, Number(data.reintentar_en_ms) || 15000);
+        } else if (data.estado === 'error' || response.status === 429) failed(entry);
         else throw Error('Invalid job status');
       }
       try {
-        if (entry.jobActive) {
-          await queueState(await fetcher('/api/versiones-consultar?id=' + encodeURIComponent(id), options));
-        } else if (!await readSnapshot()) {
+        if (enqueue) {
           await queueState(await fetcher('/api/versiones-consultar', {...options, method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sala_id:id})}));
+        } else if (entry.jobActive) {
+          await queueState(await fetcher('/api/versiones-consultar?id=' + encodeURIComponent(id), options));
         }
       } catch {
         if (!entry.paused || timedOut) failed(entry);
@@ -140,29 +145,38 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     return entry.pending;
   }
   return {
+    open(room) {
+      const id = room?.versionsRoomId;
+      if (!roomIdValid(id)) return Promise.resolve();
+      if (!entries.get(id)?.open) {
+        entries.set(id, {id, open:true, started:false, snapshot:null, nextFetch:0, pending:null,
+          phase:'idle', jobActive:false, deadline:null});
+      }
+      return fetchRoom(id);
+    },
+    close(id) {
+      for (const [key, entry] of entries) if (id === undefined || key === id) {
+        entry.open = false; entry.paused = true; entry.controller?.abort();
+      }
+    },
     async refresh(rooms) {
-      const ids = [...new Set(rooms.filter(r => Array.isArray(r.players) && r.players.length && roomIdValid(r.versionsRoomId)).map(r => r.versionsRoomId))];
+      const ids = [...new Set(rooms.filter(r => roomIdValid(r.versionsRoomId)).map(r => r.versionsRoomId))];
       await Promise.all(ids.map(fetchRoom));
     },
     decorate(room) { return applyRoomSnapshot(room, entries.get(room.versionsRoomId)?.snapshot, now()); },
     status(id) {
       const entry = entries.get(id);
-      if (!entry || entry.phase === 'ready' || entry.phase === 'idle') return null;
-      if (entry.phase === 'error' || entry.jobActive && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones.', retry:true, canRetry:now() >= entry.retryAt};
+      if (!entry?.open || entry.phase === 'idle') return null;
+      if (entry.phase === 'ready') return entry.snapshot && !snapshotFresh(entry.snapshot.consultado_en, now())
+        ? {text:'Los datos vencieron. Cerrá y volvé a abrir la sala para actualizar.', retry:false} : null;
+      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) return {text:'No se pudieron consultar las versiones. Cerrá y volvé a abrir la sala para reintentar.', retry:false};
       return {text:'Consultando versiones…', retry:false};
-    },
-    retry(id) {
-      const entry = entries.get(id);
-      if (entry && entry.phase === 'error' && now() >= entry.retryAt) {
-        update(entry, {phase:'idle', jobActive:false, deadline:null, nextFetch:0});
-      }
     },
     nextExpiry() {
       const times = [];
       for (const entry of entries.values()) {
         if (entry.snapshot && snapshotFresh(entry.snapshot.consultado_en, now())) times.push(Date.parse(entry.snapshot.consultado_en) + VERSION_TTL_MS);
         if (entry.jobActive && entry.deadline > now()) times.push(entry.deadline);
-        if (entry.phase === 'error' && entry.retryAt > now()) times.push(entry.retryAt);
       }
       return times.length ? Math.min(...times) : null;
     },
@@ -170,6 +184,11 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       const ids = new Set(rooms.map(r => r.versionsRoomId));
       for (const [id, entry] of entries) if (!ids.has(id)) { entry.paused = true; entry.controller?.abort(); entries.delete(id); }
     },
-    abort() { for (const entry of entries.values()) if (entry.controller) {entry.paused = true; entry.nextFetch = 0; entry.controller.abort();} }
+    abort() {
+      for (const entry of entries.values()) if (entry.controller) {
+        entry.paused = true; entry.nextFetch = 0; entry.controller.abort();
+        if (!entry.jobActive) failed(entry); // An uncertain POST must not be sent twice in this opening.
+      }
+    }
   };
 }

@@ -55,6 +55,7 @@ class WorkerTests(unittest.TestCase):
             self.assertNotIn('private-secret',safe_detail('error private-secret'))
         request=opener.open.call_args.args[0]
         self.assertEqual(request.get_header('X-collector-key'),'private-secret');self.assertIsNone(request.get_header('X-api-key'))
+        self.assertEqual(request.get_header('Content-type'),'application/json')
         self.assertEqual(opener.open.call_args.kwargs['timeout'],6)
 
     def test_enet_subprocess_never_inherits_https_secrets(self):

@@ -1,8 +1,9 @@
 # Versiones por jugador en Preview
 
-La etapa actual es bajo demanda: ver [ON_DEMAND.md](ON_DEMAND.md). Este documento
-describe la integración visual original; el caché ahora dura 120 s y el polling
-de 2 s solo sigue trabajos pendientes. No activar el temporizador periódico antiguo.
+La etapa actual es estrictamente por apertura: ver [ON_DEMAND.md](ON_DEMAND.md).
+Un POST por apertura; GET de estado solo mientras haya trabajo pendiente. Los
+120 s son caducidad de visualización y no activan trabajo. Una reapertura no está
+bloqueada por esa caché. No activar el temporizador periódico antiguo.
 
 Entorno exclusivo: test/enet-versions-sralcer. Los fetch de la página son relativos
 al origen actual; al abrir el Preview usan su DB=eden-rooms-test-db y nunca
@@ -37,24 +38,19 @@ Todos los textos se escapan antes de insertarse en el HTML.
 
 ## Frecuencia y caducidad
 
-- Las salas cerradas/no registradas/vacías no originan solicitudes de versiones.
-- Solo se consulta la tarjeta abierta; se reutiliza su respuesta durante 30 s.
-  Abrir/cerrar la tarjeta o refrescar el lobby no duplica una petición en curso.
-- El lobby conserva su refresco de 10 s. Las versiones se revisan cada 15 s pero
-  la caché limita las peticiones normales a una cada 30 s por sala abierta.
-- Cuando la pestaña está oculta se suspenden los refrescos de lobby/versiones y
-  se cancelan solicitudes de versiones pendientes. Al volver se revisa la caducidad.
-- La antigüedad se calcula desde consultado_en, no desde la descarga. A los 120 s
-  se retira la versión mediante un temporizador propio, aunque falle la red o el
-  lobby. Una respuesta no renueva artificialmente la fecha de la muestra.
-- La API y el matcher comparten el límite de 120 s. Las versiones ENet del lobby
-  llevan fecha/origen; el navegador no permite que esos campos eludan la consulta
-  de versiones-sala ni vuelvan a aparecer después de vencer.
-- Conservar versiones explícitas nativas del lobby no equivale a conservar una
-  muestra ENet vencida: esos campos se distinguen por su origen.
-
-Las consultas HTTP de la web NO abren ENet. Solo el recolector independiente
-consulta salas y publica muestras. No se guarda estado de jugadores en localStorage.
+- Solo el evento explícito de abrir la tarjeta inicia un POST por apertura.
+- Una vez terminada la consulta, no hay más lecturas de versiones ni nuevos POST
+  mientras esa tarjeta siga abierta. El refresco del lobby sigue independiente.
+- Los GET cada dos segundos siguen exclusivamente el trabajo pendiente y no lo
+  crean ni lo reinician. Cerrar la tarjeta deja de seguirlo, sin cancelar el
+  trabajo compartido que puede necesitar otro visitante.
+- Cerrar/reabrir permite otra solicitud, incluso con datos de menos de 120 s.
+  Si ya hay un trabajo activo de esa sala, Cloudflare lo comparte. Se conservan
+  cuotas, cooldown, límites de concurrencia y validación de destinos.
+- A los 120 s se ocultan las versiones vencidas; no se renuevan automáticamente.
+- Tras error, el mensaje indica cerrar/reabrir. No se reenvía un POST perdido o
+  abortado por ocultar la pestaña dentro de la misma apertura.
+- Cambios de juegos, identidades ambiguas y datos vencidos siguen sin enriquecerse.
 
 ## Recolector automático: propuesta, no activada
 
@@ -111,7 +107,8 @@ python3 backend/enet/collector.py \
    debe coincidir con el registro de su jugador; quien no tenga versión conserva
    únicamente el juego junto a su nombre. El diseño de la tarjeta no cambia.
 6. En Network del navegador comprobar la petición versiones-sala y su ID. Reabrir
-   la misma tarjeta dentro de 30 s reutiliza la caché. Al detener el recolector y
+   la misma tarjeta realiza otro POST incluso con datos frescos. Mantenerla abierta
+   no genera solicitudes ENet periódicas. Al detener el recolector y
    esperar hasta consultado_en + 120 s, las versiones deben desaparecer.
 7. Confirmar que otra sala con el mismo apodo no hereda versiones y que en móvil
    no hay desbordamiento horizontal. Ninguna clave debe estar en solicitudes del

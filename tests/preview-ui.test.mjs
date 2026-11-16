@@ -20,7 +20,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     const browser=await chromium.launch({headless:true,executablePath:process.env.EDEN_CHROMIUM||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
     try{
       const page=await browser.newPage({viewport:{width,height}});
-      const now=Date.now(),errors=[],requests=[];
+      const now=Date.now(),errors=[],requests=[],openingRequests=[];
       page.on('pageerror',error=>errors.push(error.message));
       await page.clock.install({time:new Date(now)});
       const mario='Mario Kart 8 Deluxe',smash='Super Smash Bros. Ultimate';
@@ -38,6 +38,11 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.route('**/api/**',async route=>{
         const url=new URL(route.request().url());
         if(url.pathname==='/api/rooms')return route.fulfill({json:{rooms}});
+        if(url.pathname==='/api/versiones-consultar'){
+          assert.equal(route.request().method(),'POST');
+          const id=route.request().postDataJSON().sala_id;openingRequests.push(id);
+          return route.fulfill({json:{sala_id:id,estado:'listo'}});
+        }
         if(url.pathname==='/api/versiones-sala'){
           const id=url.searchParams.get('id');requests.push(id);
           return route.fulfill({json:id==='sala-prueba-20668'?snapshot:{disponible:false,sala_id:id,jugadores:[]}});
@@ -68,12 +73,15 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('html')).toHaveClass(/light/);
       await page.locator('[data-room-toggle="room.test:20668"]').click();
       await page.locator('[data-room-toggle="room.test:20668"]').click();
-      assert.equal(requests.length,1,'reopening reuses fresh cached data');
+      await expect.poll(()=>openingRequests.length).toBe(2);
+      await expect.poll(()=>requests.length).toBe(2);
       await page.clock.fastForward(31000);
-      await expect.poll(()=>requests.length).toBe(1);
+      await expect.poll(()=>requests.length).toBe(2);
+      assert.equal(openingRequests.length,2);
       await page.clock.fastForward(90000);
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
       await expect(eden).toContainText(mario);
+      assert.equal(openingRequests.length,2,'expiry must never trigger another ENet request');
       await page.locator('[data-room-toggle="other.test:6007"]').click();
       await expect.poll(()=>requests.includes('other')).toBe(true);
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
@@ -86,7 +94,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
 }
 
 for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
-  test(`On-demand UI (${device}): queue, result without reload, offline timeout and retry`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
+  test(`On-demand UI (${device}): single opening request, no periodic ENet, reopen and offline timeout`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
     const {chromium,expect}=await import(process.env.EDEN_PLAYWRIGHT_MODULE);
     const server=createServer(async(req,res)=>{
       const path=new URL(req.url,'http://localhost').pathname;
@@ -123,21 +131,27 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.locator('[data-room-toggle]').click();
       await expect(page.locator('.version-request-status')).toContainText('Consultando versiones…');
       await expect.poll(()=>queued).toBe(1);
-      await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
       assert.equal(queued,1);
       await page.clock.fastForward(2000);await expect.poll(()=>polls).toBe(1);
       await page.clock.fastForward(2000);await expect(page.locator('.room-open .player-version')).toHaveText('Versión 13.0.5');
       assert.equal(queued,1);assert.equal(privateRequests,0);
-      await page.clock.fastForward(120001);
-      await expect.poll(()=>queued).toBe(2);
+      await page.clock.fastForward(600001);
+      assert.equal(queued,1,'ten minutes with the card open must not enqueue again');
       await expect(page.locator('.room-open .player-version')).toHaveCount(0);
+      await expect(page.locator('.version-request-status')).toContainText('Los datos vencieron');
+      const nextOpening=page.waitForResponse(response=>response.url().endsWith('/api/versiones-consultar')&&response.request().method()==='POST');
+      await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
+      const accepted=await nextOpening;await accepted.finished();
+      await page.evaluate(()=>document.readyState); // Let the accepted response's JSON microtasks settle before advancing the clock.
+      await expect.poll(()=>queued).toBe(2);
       await page.clock.fastForward(45001);
       await expect(page.locator('.version-request-status')).toContainText('No se pudieron consultar las versiones.');
-      const retry=page.getByRole('button',{name:'Reintentar',exact:true});
-      await expect(retry).toBeDisabled();
-      await page.clock.fastForward(15001);await expect(retry).toBeEnabled();
-      assert.equal(queued,2,'offline worker must not cause automatic re-enqueue loops');
-      await retry.click();await expect.poll(()=>queued).toBe(3);
+      await expect(page.locator('.version-request-status')).toContainText('Cerrá y volvé a abrir');
+      await expect(page.getByRole('button',{name:'Reintentar',exact:true})).toHaveCount(0);
+      await page.clock.fastForward(60001);
+      assert.equal(queued,2,'an error must not restart work while the card remains open');
+      await page.locator('[data-room-toggle]').click();await page.locator('[data-room-toggle]').click();
+      await expect.poll(()=>queued).toBe(3);
       assert.equal(privateRequests,0);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

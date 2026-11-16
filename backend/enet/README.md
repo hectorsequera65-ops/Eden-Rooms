@@ -188,6 +188,16 @@ La propuesta actual reemplaza el sondeo periódico de salas por trabajos de
 Preview, creados al abrir una tarjeta. Ver [ON_DEMAND.md](ON_DEMAND.md) para la
 migración de eden-rooms-test-db, la configuración y comandos de instalación
 sin activar el servicio. El worker reutiliza collector.py y client.c; no expone
-un servidor en Ubuntu. El caché de resultados dura 120 s; se consulta estado
-cada 2 s únicamente mientras se espera un trabajo. El timer anterior queda
+un servidor en Ubuntu. Cada apertura envía un único POST, sin renovación automática mientras siga
+abierta. El TTL de 120 s solo limita la visualización; cerrar/reabrir permite
+una consulta nueva. Se consulta estado cada 2 s únicamente mientras se espera
+un trabajo. El timer anterior queda
 como referencia y no debe ejecutarse junto al nuevo servicio.
+
+## Una solicitud por apertura
+
+La web inicia trabajos únicamente desde el evento de abrir la tarjeta. Los
+refrescos del lobby, el vencimiento de los 120 s y volver a la pestaña no
+encolan trabajo. Cloudflare comparte trabajos activos, pero ya no usa una
+muestra reciente para omitir el POST de una nueva apertura. El servicio Ubuntu
+ondemand sigue compatible y sin cambios; no requiere reinstalación ni migración.
