@@ -144,3 +144,10 @@ Cloudflare Pages para mantener el filtro adicional de ambas APIs de recepción.
 Sin configurar esa variable, las APIs excluyen `sralcer`. Un jugador real con el
 mismo apodo también se excluiría; el protocolo puede rechazar nombres ocupados.
 No se cambió ninguna variable remota ni se reinició el servicio.
+
+## Error HTTP 403 / Cloudflare 1010 en Ubuntu
+
+Consultar [CLOUDFLARE_ACCESS.md](CLOUDFLARE_ACCESS.md) para el diagnóstico de BIC
+en Pages, la clave de lectura opcional y el plan de revisión de reglas. El
+cliente ahora se identifica como EdenRoomsCollector y ofrece --check-api para
+probar solo la API, sin ENet ni escrituras.

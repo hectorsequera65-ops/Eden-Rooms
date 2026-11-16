@@ -1,3 +1,5 @@
 EDEN_PAGES_URL=https://your-project.pages.dev
 VERSIONES_API_KEY=replace-with-a-private-secret
 EDEN_ENET_NICKNAME=sralcer
+# Optional read-only key: set the same secret in Pages after reviewing deployment.
+# AUTORIZACIONES_API_KEY=replace-with-a-separate-read-only-secret

@@ -3,25 +3,82 @@
 import argparse
 from datetime import datetime, timezone
 import json
+from html import unescape
 import os
 import re
 import subprocess
 import sys
 import time
 import urllib.request
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from protocol import parse_packet3
 
 
+USER_AGENT = 'EdenRoomsCollector/1.1 (+https://github.com/hectorsequera65-ops/Eden-Rooms)'
+
+
+class ApiError(RuntimeError):
+    """A bounded, redacted API diagnostic safe to print to the service journal."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward collector credentials to a redirect destination.
+        return None
+
+
+def safe_detail(value, limit=800):
+    text = str(value)
+    for key in ('VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY'):
+        secret = os.environ.get(key)
+        if secret:
+            text = text.replace(secret, '[REDACTED]')
+    text = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', text, flags=re.I | re.S)
+    text = unescape(re.sub(r'<[^>]*>', ' ', text))
+    text = ''.join(c if c.isprintable() else ' ' for c in text)
+    return ' '.join(text.split())[:limit]
+
+
 def api(base, path, payload=None):
     body = None if payload is None else json.dumps(payload).encode()
-    headers = {'Accept': 'application/json'}
+    method = 'GET' if body is None else 'POST'
+    headers = {'Accept': 'application/json', 'User-Agent': USER_AGENT}
+    if body is None and path == '/api/autorizaciones':
+        key = os.environ.get('AUTORIZACIONES_API_KEY')
+        if key:
+            headers['X-Collector-Key'] = key
     if body is not None:
         headers.update({'Content-Type': 'application/json',
                         'X-API-Key': os.environ['VERSIONES_API_KEY']})
     req = urllib.request.Request(base + path, data=body, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as response:
-        return json.load(response)
+    opener = urllib.request.build_opener(NoRedirect())
+    try:
+        with opener.open(req, timeout=15) as response:
+            try:
+                return json.load(response)
+            except (ValueError, UnicodeError) as error:
+                raise ApiError(f'{method} {path}: HTTP {response.status}, invalid JSON response') from error
+    except HTTPError as error:
+        try:
+            raw = error.read(8192).decode('utf-8', errors='replace')
+        except (OSError, ValueError):
+            raw = 'Response body unavailable'
+        finally:
+            error.close()
+        ray = safe_detail(error.headers.get('CF-Ray', 'not provided'), 100)
+        retry = error.headers.get('Retry-After')
+        diagnostic = (f'{method} {path}: HTTP {error.code} {safe_detail(error.reason, 100)}; '
+                      f'CF-Ray={ray}; detail={safe_detail(raw) or "empty response"}')
+        if retry:
+            diagnostic += f'; Retry-After={safe_detail(retry, 100)}'
+        if error.code in (301, 302, 303, 307, 308):
+            diagnostic += '; redirect refused: use the canonical HTTPS base URL'
+        raise ApiError(diagnostic) from None
+    except URLError as error:
+        raise ApiError(f'{method} {path}: network/TLS error: {safe_detail(error.reason)}') from None
+    except (TimeoutError, OSError) as error:
+        raise ApiError(f'{method} {path}: network error: {safe_detail(error)}') from None
 
 
 def collect(binary, room, duration, emit, nickname="sralcer"):
@@ -68,9 +125,12 @@ def main():
     parser.add_argument('--duration', type=int, default=20)
     parser.add_argument('--interval', type=int, default=30)
     parser.add_argument('--once', action='store_true')
+    parser.add_argument('--check-api', action='store_true', help='Check authorization API once, without ENet or writes')
     parser.add_argument('--send', action='store_true')
     parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME', 'sralcer'))
     args = parser.parse_args()
+    if args.check_api and args.send:
+        parser.error("--check-api cannot be combined with --send")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
         parser.error("Nickname must contain 1-24 letters, digits, underscores or hyphens")
     base = args.base_url.rstrip('/')
@@ -82,8 +142,15 @@ def main():
     if args.send and not os.environ.get('VERSIONES_API_KEY'):
         parser.error('VERSIONES_API_KEY is required for --send')
     while True:
+        failed = False
         try:
-            rooms = api(base, '/api/autorizaciones')['salas']
+            data = api(base, '/api/autorizaciones')
+            if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
+                raise ApiError('GET /api/autorizaciones: unexpected JSON schema (expected salas array)')
+            rooms = data['salas']
+            if args.check_api:
+                print(json.dumps({'ok': True, 'salas': len(rooms)}))
+                return 0
             for room in rooms:
                 if not room.get('autorizada') or not room.get('direccion') or not room.get('puerto'):
                     continue
@@ -95,13 +162,15 @@ def main():
                             print(json.dumps(snapshot, ensure_ascii=False), flush=True)
                     collect(args.client, room, args.duration, emit, args.nickname)
                 except Exception as error:
-                    print(f"Collection failed for {room['id']}: {type(error).__name__}", file=sys.stderr)
+                    failed = True
+                    print(f"Collection failed for {room['id']}: {type(error).__name__}: {safe_detail(error, 1400)}", file=sys.stderr)
         except Exception as error:
-            print(f'Authorization fetch failed: {type(error).__name__}', file=sys.stderr)
-        if args.once:
-            break
+            failed = True
+            print(f'Authorization fetch failed: {type(error).__name__}: {safe_detail(error, 1400)}', file=sys.stderr)
+        if args.once or args.check_api:
+            return int(failed)
         time.sleep(args.interval)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
