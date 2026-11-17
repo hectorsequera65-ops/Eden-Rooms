@@ -128,8 +128,9 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
     child_env = {key: value for key, value in os.environ.items()
                  if key not in ('COLLECTOR_API_KEY', 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY')}
     child_env['EDEN_ENET_NICKNAME'] = nickname
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          text=True, env=child_env) as process:
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          encoding='ascii', errors='replace', env=child_env) as process:
+        last_diagnostic = ''
         watchdog = None
         if hard_timeout is not None:
             watchdog = threading.Timer(hard_timeout, process.kill)
@@ -138,6 +139,8 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
         try:
             for line in process.stdout:
                 if not line.startswith('EDEN_PACKET3 '):
+                    if line.startswith(nickname + ': '):
+                        last_diagnostic = safe_detail(line, 160)
                     continue
                 timestamp = datetime.now(timezone.utc).isoformat()
                 try:
@@ -154,8 +157,10 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
                     snapshots_received += 1
                 except (ValueError, UnicodeError) as error:
                     print(f"Rejected snapshot for {room['id']}: {error}", file=sys.stderr)
-            if process.wait() != 0:
-                raise RuntimeError('ENet client failed; no empty snapshot sent')
+            status = process.wait()
+            if status != 0:
+                detail = last_diagnostic if status > 0 else f'terminated by signal {-status}'
+                raise RuntimeError(f'ENet client exited with status {status}: {detail or "no diagnostic"}')
             if not snapshots_received:
                 raise RuntimeError('No valid snapshots received; nothing sent')
         finally:

@@ -2,7 +2,7 @@
 """Preview-only outbound HTTPS worker. Does not expose an HTTP listener."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime
 import ipaddress
 import os
 import re
@@ -33,8 +33,8 @@ def validate_target(address,port,networks):
     try:ip=ipaddress.ip_address(address)
     except ValueError:raise ValueError('Only literal public IPv4 targets are accepted') from None
     if (ip.version!=4 or not ip.is_global or ip.is_multicast or ip.is_reserved
-            or str(ip)!=address or not any(ip in network for network in networks)):
-        raise ValueError('Target is not a public allowlisted IPv4')
+            or str(ip)!=address or (networks is not None and not any(ip in network for network in networks))):
+        raise ValueError('Target is not a permitted public IPv4')
     if type(port) is not int or not 1<=port<=65535:
         raise ValueError('Invalid target port')
     return str(ip),port
@@ -67,26 +67,37 @@ class JobWorker:
             identity={'job_id':job['job_id'],'lease_token':job['lease_token']}
             if not isinstance(job.get('sala_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',job['sala_id']):
                 raise ValueError('Invalid room ID')
-            address,port=validate_target(job.get('direccion'),job.get('puerto'),self.networks)
+            # Preview rechecks lobby membership when leasing a lobby job.
+            networks=None if job['sala_id'].startswith('lobby-') else self.networks
+            address,port=validate_target(job.get('direccion'),job.get('puerto'),networks)
+            if networks is None and job['sala_id']!=f"lobby-{address.replace('.', '-')}-{port}":
+                raise ValueError('Room ID does not match target')
             deadline=datetime.fromisoformat(job['vence_en'].replace('Z','+00:00'))
             if deadline.tzinfo is None:raise ValueError('Deadline must have timezone')
             remaining=deadline.timestamp()-self.now()
             if remaining<10 or remaining>35:raise ValueError('Job lease is expired or invalid')
-            hard_timeout=min(15,remaining-8)
-            duration=max(1,min(8,int(hard_timeout)-2))
-            snapshots=[]
+            # Leave time for the HTTPS completion. The C client also needs
+            # up to one second to disconnect after the sampling window.
+            hard_timeout=min(11,remaining-7)
+            duration=min(8,int(hard_timeout)-2)
+            snapshot=None
+
+            def keep_latest(sample):
+                nonlocal snapshot
+                snapshot=sample
             self.collector(self.binary,{'id':job['sala_id'],'direccion':address,'puerto':port},duration,
-                           snapshots.append,'sralcer',hard_timeout=hard_timeout)
-            if not snapshots:raise ValueError('No valid ENet snapshot')
+                           keep_latest,'sralcer',hard_timeout=hard_timeout)
+            if snapshot is None:raise ValueError('No valid ENet snapshot')
             if self.now()>=deadline.timestamp()-1:raise ValueError('Job expired before completion')
-            result=self.request({'action':'complete',**identity,'snapshot':snapshots[-1]})
+            result=self.request({'action':'complete',**identity,'snapshot':snapshot})
             if not isinstance(result,dict) or result.get('ok') is not True:raise ApiError('Completion not acknowledged')
             return True
         except Exception as error:
             print(f'ENet job failed: {type(error).__name__}: {safe_detail(error)}',file=sys.stderr)
             if identity:
                 try:self.request({'action':'fail',**identity})
-                except Exception:pass # Expired leases are cleaned up server-side.
+                except Exception as failure:
+                    print(f'Could not report ENet job failure: {safe_detail(failure)}',file=sys.stderr)
             return False
 
 
@@ -102,7 +113,8 @@ def main():
     if not os.environ.get('COLLECTOR_API_KEY'):parser.error('COLLECTOR_API_KEY is required')
     if not 2<=args.poll_seconds<=30:parser.error('Poll interval must be 2–30 seconds')
     try:
-        networks=parse_allowlist(args.allow_cidr+[s for s in os.environ.get('ENET_ALLOWED_CIDRS','').split(',') if s.strip()])
+        cidrs=args.allow_cidr+[s for s in os.environ.get('ENET_ALLOWED_CIDRS','').split(',') if s.strip()]
+        networks=parse_allowlist(cidrs) if cidrs else []
         worker=JobWorker(args.base_url,args.client,networks)
     except ValueError as error:parser.error(str(error))
     if args.once:

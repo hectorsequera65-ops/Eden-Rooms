@@ -33,10 +33,9 @@ no se rellena la lista con una captura ENet antigua. Sin IP compartida no se
 atribuye una versión solo por apodo: se exige además juego y Title ID exactos,
 con apodo único en las dos listas. La tarjeta informa ese modo de asociación.
 
-Esta etapa no cambia el esquema, los secretos ni la API privada del worker.
-No requiere migración adicional ni reinstalar/reiniciar eden-rooms-on-demand.service.
-La migración/instalación de las secciones siguientes corresponde solo a la primera
-instalación. Si ya está configurado, basta actualizar el despliegue Preview.
+Esta etapa conserva el esquema, los secretos y la API privada. Para consultar
+salas públicas con ID de lobby, Preview y el worker de Ubuntu deben ejecutar
+esta versión. La migración solo corresponde a la primera instalación.
 
 El sistema NO expone un servidor HTTP en Ubuntu. Todas sus conexiones HTTP son
 salientes hacia el Preview. El navegador nunca llama a la ruta privada ni recibe
@@ -66,12 +65,10 @@ COLLECTOR_API_KEY, VERSIONES_API_KEY o tokens de asignación.
   con un límite de bytes. No se usan cabeceras User-Agent como autenticación.
 - Solo IPv4 públicas LITERALES: se rechazan localhost, redes privadas, link-local,
   CGNAT, multicast, rangos de documentación/reservados y dominios. No hay resolución
-  DNS ni rebinding del destino ENet. Registrar en salas_endpoints una IPv4 pública
-  exacta; no usar un dominio para esta primera versión.
-- Ubuntu requiere además una lista explícita de CIDRs permitidos, preferentemente
-  /32 por servidor. No acepta redes más amplias que /24 y vuelve a comprobar que
-  cada IP sea global. Las IPs virtuales de los JUGADORES sí pueden ser privadas:
-  son datos de identidad, nunca se utilizan como destinos de conexión.
+  DNS del destino ENet. El identificador de la sala se deriva de su IPv4 y puerto en el lobby.
+- El worker valida nuevamente que la IP sea pública y el identificador coincida
+  con la IP y el puerto del trabajo. La lista de CIDRs es opcional y solo aplica
+  a trabajos con identificadores registrados de la integración anterior.
 - collector.py mantiene el timeout normal de C y añade un watchdog externo para
   el worker. El proceso C no hereda las claves HTTPS. Los redirects HTTP se
   rechazan; TLS sigue verificándose y los errores no publican credenciales.
@@ -99,9 +96,7 @@ El script crea solo enet_version_jobs, enet_request_limits y un índice. No alte
 las tres tablas existentes ni elimina datos. NO ejecutarlo contra eden-rooms-db.
 Este comando no se ejecutó durante el desarrollo.
 
-Revisar que el binding DB de PREVIEW siga conectado a eden-rooms-test-db y que la
-sala-prueba-20668 esté autorizada con la IP pública y el puerto reales. El script
-no autoriza salas ni acepta endpoints del visitante. No tocar el binding de
+Revisar que el binding DB de PREVIEW siga conectado a eden-rooms-test-db. Las salas públicas del lobby no requieren registros individuales en D1. No tocar el binding de
 producción.
 
 ## 2. Configuración de Cloudflare Preview, aún por realizar manualmente
@@ -155,16 +150,9 @@ sudo systemctl daemon-reload
 ```
 
 Si ya existe el archivo, NO sobrescribirlo con la plantilla: editarlo directamente.
-El contenido debe tener COLLECTOR_API_KEY con la clave de Preview y, por ejemplo:
-
-```
-ENET_ALLOWED_CIDRS=69.24.117.72/32
-```
-
-Agregar únicamente IPs públicas autorizadas de las salas que se quieren probar,
-separadas por comas. Si el administrador cambia un endpoint en D1, revisar también
-esta lista. La sala puede estar autorizada en D1 y ser rechazada por la lista local:
-en ese caso el worker falla sin abrir ENet.
+El archivo debe incluir COLLECTOR_API_KEY con la clave de Preview. Conservar
+ENET_ALLOWED_CIDRS si también se usan identificadores registrados de la
+integración anterior.
 
 No hay comandos start/enable en esta fase de instalación. No instalar el timer
 periódico antiguo para este flujo. La unidad nueva sigue separada de eden-sala y
@@ -178,7 +166,6 @@ imprimirla ni incluirla como argumento del proceso:
 ```sh
 read -rsp 'COLLECTOR_API_KEY de Preview: ' COLLECTOR_API_KEY
 export COLLECTOR_API_KEY
-export ENET_ALLOWED_CIDRS=69.24.117.72/32
 python3 /opt/eden-rooms-enet/job_worker.py --workers 2 --poll-seconds 3
 ```
 
@@ -190,22 +177,19 @@ está fijada/validada como Preview, nunca producción.
 En otra ventana:
 
 1. Abrir https://test-enet-versions-sralcer.eden-rooms.pages.dev/.
-2. Desplegar la sala cuyo versionsRoomId sea sala-prueba-20668. Debe seguir en el
-   lobby público y coincidir por endpoint; no se crean salas offline desde D1.
-3. Abrir/reabrir no envía POST. Solo pulsar Consultar versiones lo envía.
-   Solo se reutiliza un trabajo PENDIENTE o EN EJECUCIÓN de otro visitante.
+2. Desplegar la sala de referencia y otras salas públicas sin contraseña con IP o puerto distintos.
+3. La tarjeta muestra los jugadores al abrirse. Pulsar «Consultar versiones»
+   para iniciar la consulta ENet.
 4. Ver «Consultando versiones…» y en Network un POST versiones-consultar que solo
    contiene sala_id, seguido por GET de estado. No debe haber peticiones del
    navegador a /api/collector/jobs ni cabeceras con claves.
-5. Al terminar el worker aparece la versión sin recargar. Comparar con
-   /api/versiones-sala?id=sala-prueba-20668. Varios visitantes simultáneos comparten
-   el mismo trabajo activo. Otro clic manual posterior a su finalización puede crear otro.
-6. Mantener la tarjeta abierta diez minutos: no debe haber nuevos POST de
-   versiones-consultar. Tras 120 s o varias horas las versiones y hora originales siguen visibles para jugadores que continúan presentes.
-   El enlace permite otra consulta; cerrar/reabrir no la inicia.
-7. Detener el worker con Ctrl+C. La espera termina como máximo a los 45 s con un
-   mensaje discreto que permite reintentar con Consultar versiones. Esperar el cooldown de servidor antes
-   de hacerlo; dejar abierta la tarjeta no vuelve a solicitar trabajo.
+5. Al terminar el worker, aparece la versión sin recargar. Comparar con
+   /api/versiones-sala?id=<versionsRoomId>. Dos solicitudes simultáneas para la misma sala comparten el trabajo.
+6. Cerrar y reabrir la tarjeta conserva la muestra y su hora original para
+   jugadores que siguen presentes. El límite de 120 s aplica al recibir la muestra.
+7. Detener el worker con Ctrl+C y pulsar «Consultar versiones». El trabajo
+   vence a los 45 s y la última consulta de estado confirma el error. Después
+   del plazo breve se puede pulsar «Consultar versiones» de nuevo; no hay un bucle de solicitudes nuevas mientras Ubuntu esté offline.
 
 Los logs HTTP conservan código, detalle acotado y CF-Ray si Cloudflare rechaza
 al cliente. Un 404 puede indicar que no se habilitó la cola o que el host no es el

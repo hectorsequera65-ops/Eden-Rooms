@@ -142,7 +142,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
   const entries = new Map();
   function entryFor(roomOrId) {
     if (typeof roomOrId === 'string') return entries.get(roomOrId);
-    if (!roomOrId) return undefined;
+    if (!roomOrId || roomOrId.hasPassword) return undefined;
     if (roomIdValid(roomOrId.versionsRoomId)) return entries.get(roomOrId.versionsRoomId);
     // A temporary D1/lobby metadata failure must not erase a card-owned result.
     return [...entries.values()].find(entry => entry.open && entry.address === roomOrId.address
@@ -161,8 +161,8 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     if (!entry?.open) return;
     if (entry.pending) return entry.pending;
     if (entry.started && !entry.jobActive) return; // An opening can enqueue only once.
-    if (entry.jobActive && entry.deadline !== null && now() >= entry.deadline) { failed(entry,'timeout'); return; }
-    if (now() < entry.nextFetch) return;
+    const finalPoll = entry.jobActive && entry.deadline !== null && now() >= entry.deadline;
+    if (!finalPoll && now() < entry.nextFetch) return;
     const enqueue = !entry.started;
     entry.started = true; // Latch before yielding, including lost/aborted POST responses.
     const controller = new AbortController(); entry.controller = controller; entry.paused = false;
@@ -188,16 +188,20 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       async function queueState(response) {
         const data = await response.json();
         if (!entry.open || entries.get(id) !== entry) return;
-        if ((!response.ok && response.status !== 429) || data?.sala_id && data.sala_id !== id) throw Error('Queue unavailable');
+        if ((!response.ok && response.status !== 429 && !(response.status === 403 && data?.motivo === 'endpoint')) || data?.sala_id && data.sala_id !== id) throw Error('Queue unavailable');
         if (data.estado === 'listo') {
           entry.jobActive = true;
           if (!await readSnapshot()) failed(entry,'snapshot');
         } else if (data.estado === 'pendiente' || data.estado === 'consultando') {
+          if (finalPoll) { failed(entry,'timeout'); return; }
           const wait = Math.min(45000, Number(data.espera_ms));
           if (!Number.isFinite(wait) || wait <= 0) { failed(entry); return; }
           const deadline = Math.min(entry.deadline ?? Infinity, now() + wait);
           update(entry, {phase:'loading', jobActive:true, deadline, nextFetch:now() + VERSION_POLL_MS});
-        } else if (data.estado === 'error' || response.status === 429) failed(entry, response.status===429?'rate_limit':data.motivo==='collector'?'collector':data.motivo==='timeout'?'timeout':data.motivo==='snapshot'?'snapshot':'job');
+        } else if (data.estado === 'error' || response.status === 429) {
+          const knownReason = ['collector','timeout','snapshot','endpoint'].includes(data.motivo);
+          failed(entry, response.status === 429 ? 'rate_limit' : knownReason ? data.motivo : 'job');
+        }
         else throw Error('Invalid job status');
       }
       try {
@@ -207,7 +211,9 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
           await queueState(await fetcher('/api/versiones-consultar?id=' + encodeURIComponent(id), options));
         }
       } catch {
-        if (!entry.paused || timedOut) failed(entry);
+        if (finalPoll) failed(entry,'timeout');
+        else if (entry.jobActive && now() < entry.deadline) entry.nextFetch = now() + VERSION_POLL_MS;
+        else if (!entry.paused || timedOut) failed(entry);
       } finally { clearTimeout(timeout); entry.pending = null; entry.controller = null; }
     })();
     return entry.pending;
@@ -215,7 +221,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
   return {
     open(room) {
       const id = room?.versionsRoomId;
-      if (!roomIdValid(id)) return;
+      if (room?.hasPassword || !roomIdValid(id)) return;
       let entry = entryFor(room);
       if (!entry || entry.address !== room.address || entry.port !== Number(room.port)) {
         entry = {id, address:room.address, port:Number(room.port), started:true, snapshot:null,
@@ -225,7 +231,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       entry.open = true;
     },
     query(room) {
-      if (!roomIdValid(room?.versionsRoomId)) return Promise.resolve();
+      if (room?.hasPassword || !roomIdValid(room?.versionsRoomId)) return Promise.resolve();
       this.open(room);
       const previous = entryFor(room);
       if (!previous?.open) return Promise.resolve();
@@ -262,6 +268,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) {
         const reason = entry.phase !== 'error' ? 'timeout' : entry.errorReason;
         const detail = {collector:'El recolector ENet informó un error.', timeout:'No llegó el resultado ENet dentro del tiempo de espera.',
+          endpoint:'La sala ya no está disponible para la consulta ENet.',
           snapshot:'El trabajo terminó, pero la API no entregó una muestra vigente y válida.',
           rate_limit:'Se alcanzó un límite de solicitudes; esperá antes de reintentar.',job:'El trabajo ENet no pudo completarse.'}[reason]
           || 'No se pudo leer la respuesta de Cloudflare.';
@@ -278,7 +285,7 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     },
     retain(rooms) {
       for (const [id, entry] of entries) {
-        const sameRoom = rooms.some(room => room.address === entry.address && Number(room.port) === entry.port
+        const sameRoom = rooms.some(room => !room.hasPassword && room.address === entry.address && Number(room.port) === entry.port
           && (!roomIdValid(room.versionsRoomId) || room.versionsRoomId === id));
         const current = rooms.find(room => room.address === entry.address && Number(room.port) === entry.port);
         if (current) {

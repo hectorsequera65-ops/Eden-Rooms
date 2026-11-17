@@ -1,11 +1,17 @@
-import {test} from 'node:test';
+import {test, mock, afterEach} from 'node:test';
 import assert from 'node:assert/strict';
+import {createVersionsClient} from '../assets/player-versions.js';
 import {jobsDB} from './helpers/jobs-db.mjs';
 import {PREVIEW_HOST,publicJobRequest,privateJobRequest,publicIPv4} from '../lib/enet-jobs.js';
 import {onRequestGet as versions} from '../functions/api/versiones-sala.js';
+import {onRequestGet as listRooms} from '../functions/api/rooms.js';
+afterEach(() => mock.restoreAll());
 const base='https://'+PREVIEW_HOST;
 function setup(){
   const data=jobsDB();data.room();
+  mock.method(globalThis,'fetch',async()=>Response.json({rooms:data.sqlite.prepare(
+    'SELECT DISTINCT direccion AS address, puerto AS port FROM salas_endpoints'
+  ).all().map(room=>({...room,hasPassword:false}))}));
   const env={DB:data.DB,ENET_JOBS_ENABLED:'true',CF_PAGES_BRANCH:'test/enet-versions-sralcer',COLLECTOR_API_KEY:'collector-secret',VERSIONES_API_KEY:'write-secret'};
   const request=(path,body,headers={})=>new Request(base+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',Origin:base,'CF-Connecting-IP':'8.8.8.8',...headers},body:body===undefined?undefined:JSON.stringify(body)});
   const ask=(id='smash',now=Date.now())=>publicJobRequest({env,request:request('/api/versiones-consultar',{sala_id:id})},now);
@@ -108,6 +114,22 @@ test('reopening after completion creates a new job; status GETs alone never rest
     }
   }finally{c.sqlite.close();}
 });
+
+test('manual refresh queues despite a fresh sample and replaces pending work for a changed endpoint',async()=>{
+  const c=setup();try{
+    const now=Date.now();c.sqlite.prepare('INSERT INTO versiones_salas VALUES (?,?,?,?)').run('smash','Smash','[]',new Date(now).toISOString());
+    assert.equal((await (await c.ask('smash',now)).json()).estado,'pendiente');
+    const job=(await (await c.poll({action:'claim'},now)).json()).trabajo;
+    c.sqlite.prepare('UPDATE salas_endpoints SET direccion=? WHERE sala_id=?').run('8.8.8.8','smash');
+    const completed={action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:snapshot(now)};
+    assert.equal((await c.poll(completed,now+1000)).status,409);
+    assert.equal((await c.ask('smash',now+1000)).status,202);
+    const replacement=(await (await c.poll({action:'claim'},now+1000)).json()).trabajo;
+    assert.equal(replacement.direccion,'8.8.8.8');
+    assert.notEqual(job.job_id,replacement.job_id);
+    c.sqlite.prepare('UPDATE salas_autorizadas SET autorizada=0').run();assert.equal((await c.ask('smash',now+1000)).status,403);
+  }finally{c.sqlite.close();}
+});
 test('per-IP rate limits and global queue capacity bound abuse',async()=>{
   const c=setup();try{
     const now=Date.now();for(let i=0;i<11;i++)c.room('room'+i);
@@ -142,7 +164,9 @@ test('public JSON bodies are byte-bounded and collector failures release only th
     assert.equal(c.sqlite.prepare('SELECT status FROM enet_version_jobs').get().status,'running');
     fail.lease_token=job.lease_token;assert.equal((await c.poll(fail,now)).status,200);
     const status=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now)).json();
-    assert.equal(status.estado,'error');assert.equal(status.reintentar_en_ms,15000);
+    assert.equal(status.estado,'error');assert.equal(status.motivo,'collector');
+    const {retry_after}=c.sqlite.prepare('SELECT retry_after FROM enet_version_jobs').get();
+    assert.equal(status.reintentar_en_ms,retry_after-now);
     assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM versiones_salas').get().n,0);
   }finally{c.sqlite.close();}
 });
@@ -177,5 +201,83 @@ test('public job states distinguish collector failure and timeout from completed
     await c.ask('smash',now+19000);
     state=await (await publicJobRequest({env:c.env,request:c.request('/api/versiones-consultar?id=smash')},now+65000)).json();
     assert.equal(state.estado,'error');assert.equal(state.motivo,'timeout');
+  }finally{c.sqlite.close();}
+});
+
+test('a browser refresh crosses the SQLite queue and replaces each matching player version',async()=>{
+  const c=setup();try{
+    let now=Date.now();
+    const old=snapshot(now);
+    c.sqlite.prepare('INSERT INTO versiones_salas VALUES (?,?,?,?)')
+      .run('smash','Smash',JSON.stringify(old.jugadores),old.consultado_en);
+    const gameName=old.jugadores[0].juego;
+    const room={versionsRoomId:'smash',address:'69.24.117.72',port:20668,players:[
+      {nickname:'Eden',gameName,fakeIp:'10.166.1.1'},{nickname:'Another',gameName,fakeIp:'10.166.1.2'},{nickname:'No report',gameName,fakeIp:'10.166.1.3'}
+    ]};
+    const client=createVersionsClient({now:()=>now,fetcher:(url,options)=>{
+      const request=c.request(url,options.method==='POST'?JSON.parse(options.body):undefined);
+      return url.startsWith('/api/versiones-sala')
+        ? versions({env:c.env,request}) : publicJobRequest({env:c.env,request},now);
+    }});
+    const playerVersions=()=>client.decorate(room).players.map(p=>p.gameVersion);
+    await client.refresh([room]);
+    assert.deepEqual(playerVersions(),[undefined,undefined,undefined]);
+    assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM enet_version_jobs').get().n,0);
+    await client.query(room);
+    const job=(await (await c.poll({action:'claim'},now)).json()).trabajo;
+    const observation=old.jugadores[0];
+    const fresh={...snapshot(now),jugadores:[
+      {...observation,version:'13.0.4'},
+      {...observation,nombre:'Another',version:'7.0.0',virtual_ip:'10.166.1.2'},
+      {...observation,nombre:'No report',version:'',virtual_ip:'10.166.1.3'}
+    ]};
+    assert.equal((await c.poll({action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:fresh},now)).status,200);
+    now+=2000;await client.refresh([room]);
+    assert.deepEqual(playerVersions(),['13.0.4','7.0.0',undefined]);
+    assert.equal(client.status(room).result,'matched');
+  }finally{c.sqlite.close();}
+});
+
+test('public lobby rooms share the existing queue, with isolated endpoints and results',async()=>{
+  const c=setup();
+  const lobby=[
+    {name:'TheMyndgame.com - US - The RY-YU-SU Super Smash Bros Ultimate',address:'69.24.117.72',port:20668,hasPassword:false},
+    {name:'All Games Meeting Room',address:'69.24.117.72',port:6007,hasPassword:false,players:[{nickname:'Eden'}]},
+    {name:'Sala vacía',address:'9.9.9.9',port:6007,hasPassword:false,players:[]},
+    {name:'Privada',address:'9.9.9.9',port:6008,hasPassword:true}
+  ];
+  mock.restoreAll();
+  mock.method(globalThis,'fetch',async()=>Response.json({rooms:lobby}));
+  try{
+    const {rooms}=await (await listRooms({env:c.env,request:c.request('/api/rooms')})).json();
+    assert.deepEqual(rooms.map(room=>room.versionsRoomId), [
+      'lobby-69-24-117-72-20668', 'lobby-69-24-117-72-6007', 'lobby-9-9-9-9-6007', null
+    ]);
+    assert.deepEqual(rooms[1].players,lobby[1].players);
+    assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM enet_version_jobs').get().n,0);
+    const now=Date.now();
+    assert.equal((await c.ask('lobby-9-9-9-9-6008',now)).status,403);
+    c.room('locked-legacy','9.9.9.9',6008);
+    assert.equal((await c.ask('locked-legacy',now)).status,403);
+    assert.equal((await versions({env:c.env,request:c.request('/api/versiones-sala?id=locked-legacy')})).status,404);
+    for(const [index,room] of rooms.slice(0,3).entries()){
+      const id=room.versionsRoomId;
+      assert.equal((await c.ask(id,now)).status,202);
+      const {trabajo:job}=await (await c.poll({action:'claim'},now)).json();
+      assert.deepEqual([job.sala_id,job.direccion,job.puerto],[id,room.address,room.port]);
+      const sample=snapshot(now,id);
+      sample.jugadores[0].version='13.0.'+index;
+      assert.equal((await c.poll({action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:sample},now)).status,200);
+    }
+    for(const [index,room] of rooms.slice(0,3).entries()){
+      const result=await (await versions({env:c.env,request:c.request('/api/versiones-sala?id='+room.versionsRoomId)})).json();
+      assert.equal(result.jugadores[0].version,'13.0.'+index);
+      assert.deepEqual(result.endpoint,{direccion:room.address,puerto:room.port});
+    }
+    const id=rooms[2].versionsRoomId;
+    await c.ask(id,now);
+    lobby[2].hasPassword=true;
+    assert.equal((await (await c.poll({action:'claim'},now)).json()).trabajo,null);
+    assert.equal((await versions({env:c.env,request:c.request('/api/versiones-sala?id='+id)})).status,404);
   }finally{c.sqlite.close();}
 });

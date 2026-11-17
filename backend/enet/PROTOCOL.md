@@ -39,6 +39,17 @@ paquete. Una muestra inválida se rechaza entera, sin enviar una sala vacía.
 
 ## Evidencia y límites
 
+El núcleo de Eden obtiene la versión de los metadatos de control del juego
+cargado y la asigna a `game_info.version` antes de enviarla a la sala.
+El servidor guarda ese valor en el miembro asociado al peer ENet y lo
+escribe dentro del registro de ese miembro en el paquete 3. La versión
+puede venir vacía si el cliente no tiene metadatos. El servidor transmite
+lo que informa el cliente, sin verificar su instalación.
+
+- [Carga del juego en Eden](https://github.com/eden-emulator/mirror/blob/master/src/core/core.cpp)
+- [Recepción y difusión por miembro](https://github.com/eden-emulator/mirror/blob/master/src/network/room.cpp)
+
+
 La estructura se contrastó con la implementación pública de Eden en este snapshot:
 - https://github.com/xatyy/Eden4/blob/fab246cbac93c7995aaf451dca83ae93ba0bd234/eden/src/network/room_member.cpp
   (HandleRoomInformationPacket, secuencia de campos y metadatos de cuenta).

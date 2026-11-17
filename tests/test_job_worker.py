@@ -39,6 +39,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(request['action'],'complete');self.assertEqual(request['snapshot']['jugadores'][0]['version'],'13.0.5')
         self.assertEqual(request['lease_token'],job['lease_token'])
 
+    def test_lobby_jobs_use_their_own_public_endpoints(self):
+        capture=MagicMock(side_effect=lambda binary,room,duration,emit,nickname,**options:
+                          emit({'sala_id':room['id'],'jugadores':[]}))
+        worker=JobWorker(PREVIEW_URL,'unused',[],transport=MagicMock(return_value={'ok':True}),collector=capture)
+        for address,port in [('69.24.117.72',20668),('69.24.117.72',6007),('9.9.9.9',6007)]:
+            with self.subTest(address=address,port=port):
+                room_id=f"lobby-{address.replace('.', '-')}-{port}"
+                self.assertTrue(worker.run({**self.job(),'sala_id':room_id,'direccion':address,'puerto':port}))
+                self.assertEqual(capture.call_args.args[1],{'id':room_id,'direccion':address,'puerto':port})
+        with patch('sys.stderr',new_callable=io.StringIO):
+            self.assertFalse(worker.run({**self.job(),'sala_id':'lobby-9-9-9-9-6007','direccion':'127.0.0.1'}))
+            self.assertFalse(worker.run({**self.job(),'sala_id':'lobby-9-9-9-9-6007','direccion':'9.9.9.9','puerto':6008}))
+        self.assertEqual(capture.call_count,3)
+
     def test_unsafe_or_expired_jobs_never_launch_enet(self):
         transport=MagicMock(return_value={'ok':True});capture=MagicMock()
         worker=JobWorker(PREVIEW_URL,'unused',parse_allowlist(['69.24.117.72/32']),transport=transport,collector=capture)

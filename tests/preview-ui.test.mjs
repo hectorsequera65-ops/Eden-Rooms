@@ -115,7 +115,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
 }
 
 for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
-  test(`On-demand UI (${device}): single opening request, no periodic ENet, reopen and offline timeout`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
+  test(`On-demand UI (${device}): manual request, no periodic ENet, reopen and offline timeout`,{skip:!process.env.EDEN_PLAYWRIGHT_MODULE},async()=>{
     const {chromium,expect}=await import(process.env.EDEN_PLAYWRIGHT_MODULE);
     const server=createServer(async(req,res)=>{
       const path=new URL(req.url,'http://localhost').pathname;
@@ -129,7 +129,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       const page=await browser.newPage({viewport:{width,height},timezoneId:'America/Montevideo'});const now=Date.now();
       await page.clock.install({time:new Date(now)});
       let queued=0,polls=0,ready=false,privateRequests=0;
-      const id='sala-prueba-20668',game='Super Smash Bros. Ultimate';
+      const id='lobby-69-24-117-72-20668',game='Super Smash Bros. Ultimate';
       await page.route('**/api/**',async route=>{
         const request=route.request(),url=new URL(request.url());
         if(url.pathname.startsWith('/api/collector'))privateRequests++;

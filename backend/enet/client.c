@@ -131,11 +131,11 @@ int main(int argc, char **argv) {
                         }
                         state[i] = 2; ever[i] = 1;
                     } else if (reason(id)) {
-                        printf("%s: %s\n", names[i], reason(id));
+                        fprintf(stderr, "%s: %s\n", names[i], reason(id));
                         state[i] = 3; failed = 1; enet_peer_disconnect(event.peer, 0);
                     }
                 } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
-                    printf("%s: desconectado por el servidor o la red\n", names[i]);
+                    fprintf(stderr, "%s: desconectado por el servidor o la red\n", names[i]);
                     state[i] = 3; failed = 1;
                 }
             }
@@ -143,8 +143,8 @@ int main(int argc, char **argv) {
         }
         int active = 0;
         for (int i = 0; i < started; ++i) {
-            if (state[i] == 1 && now_ms() - sent[i] >= 15000) {
-                printf("%s: sin confirmacion de ingreso en 15 s\n", names[i]);
+            if (state[i] == 1 && now - sent[i] >= 15000) {
+                fprintf(stderr, "%s: sin confirmacion de ingreso en 15 s\n", names[i]);
                 state[i] = 3; failed = 1; enet_peer_reset(peers[i]);
             }
             active += state[i] == 1 || state[i] == 2;
@@ -156,6 +156,8 @@ int main(int argc, char **argv) {
     int joined = 0;
     for (int i = 0; i < started; ++i) {
         joined += ever[i];
+        if (state[i] == 1)
+            fprintf(stderr, "%s: sin confirmacion de ingreso en %d s\n", names[i], duration);
         if (peers[i]) enet_peer_disconnect(peers[i], 0);
     }
     for (int i = 0; i < started; ++i)
