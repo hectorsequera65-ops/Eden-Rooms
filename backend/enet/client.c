@@ -74,6 +74,7 @@ int main(int argc, char **argv) {
         fputs("Parametros invalidos: usuarios 1, segundos 1-600, puerto 1-65535.\n", stderr);
         return 2;
     }
+    int timings = getenv("EDEN_ENET_TIMINGS") != NULL;
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (enet_initialize() < 0) return 1;
     ENetAddress address = {0}; address.port = (enet_uint16)port;
@@ -84,7 +85,8 @@ int main(int argc, char **argv) {
     signal(SIGINT, stop_handler); signal(SIGTERM, stop_handler);
     ENetPeer *peers[1] = {0};
     int state[1] = {0}, ever[1] = {0}; // 0 waiting, 1 connecting, 2 joined, 3 ended
-    uint64_t sent[1] = {0};
+    uint64_t sent[1] = {0}, connected_at = 0;
+    int reported_packet = 0;
     int started = 0, failed = 0;
     uint64_t start = now_ms(), next = start;
     printf("Destino: %s:%d | Usuarios: %d | Duracion: %d s\n", argv[1], port, count, duration);
@@ -112,13 +114,22 @@ int main(int argc, char **argv) {
             if (result == 0) continue;
             if (state[i] != 3) {
                 if (event.type == ENET_EVENT_TYPE_CONNECT) {
+                    connected_at = now_ms();
+                    if (timings)
+                        printf("EDEN_TIMING connect %llu\n", (unsigned long long)(connected_at - sent[i]));
                     if (join_room(event.peer, i, password) < 0) {
                         state[i] = 3; failed = 1; enet_peer_reset(event.peer);
                         printf("%s: no se pudo enviar la solicitud\n", names[i]);
+                    } else {
+                        enet_host_flush(hosts[i]);
                     }
                 } else if (event.type == ENET_EVENT_TYPE_RECEIVE && event.packet->dataLength) {
                     unsigned char id = event.packet->data[0];
                     if (id == 3) {
+                        if (timings && !reported_packet) {
+                            printf("EDEN_TIMING first_packet %llu\n", (unsigned long long)(now_ms() - connected_at));
+                            reported_packet = 1;
+                        }
                         printf("EDEN_PACKET3 %zu ", event.packet->dataLength);
                         for (size_t k=0; k<event.packet->dataLength; ++k)
                             printf("%02x", (unsigned)event.packet->data[k]);
@@ -126,8 +137,9 @@ int main(int argc, char **argv) {
                     }
                     if (id == 2 || id == 24) {
                         if (state[i] != 2) {
+                            if (timings)
+                                printf("EDEN_TIMING join %llu\n", (unsigned long long)(now_ms() - connected_at));
                             printf("%s: CONECTADO a la sala\n", names[i]);
-
                         }
                         state[i] = 2; ever[i] = 1;
                     } else if (reason(id)) {
@@ -164,11 +176,10 @@ int main(int argc, char **argv) {
         if (hosts[i]) enet_host_flush(hosts[i]);
     uint64_t end = now_ms() + 1000;
     while (now_ms() < end) {
-        for (int i = 0; i < started; ++i) {
-            ENetEvent event;
-            if (hosts[i] && enet_host_service(hosts[i], &event, 0) > 0 &&
-                event.type == ENET_EVENT_TYPE_RECEIVE) enet_packet_destroy(event.packet);
-        }
+        if (!started || !peers[0] || peers[0]->state == ENET_PEER_STATE_DISCONNECTED) break;
+        ENetEvent event;
+        if (enet_host_service(hosts[0], &event, 0) > 0 &&
+            event.type == ENET_EVENT_TYPE_RECEIVE) enet_packet_destroy(event.packet);
         struct timespec pause = {0, 10000000};
         nanosleep(&pause, NULL);
     }

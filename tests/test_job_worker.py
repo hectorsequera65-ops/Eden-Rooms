@@ -53,6 +53,23 @@ class WorkerTests(unittest.TestCase):
             self.assertFalse(worker.run({**self.job(),'sala_id':'lobby-9-9-9-9-6007','direccion':'9.9.9.9','puerto':6008}))
         self.assertEqual(capture.call_count,3)
 
+    def test_recent_snapshot_is_reused_for_an_alias_without_refreshing_timestamp(self):
+        sampled_at = datetime.now(timezone.utc).isoformat()
+        transport = MagicMock(return_value={'ok': True})
+        capture = MagicMock(side_effect=lambda binary, room, duration, emit, nickname, **options:
+                            emit(dict(sala_id=room['id'], consultado_en=sampled_at, jugadores=[])))
+        worker = JobWorker(PREVIEW_URL, 'unused', parse_allowlist(['69.24.117.72/32']),
+                           transport=transport, collector=capture)
+        registered = self.job()
+        lobby = {**self.job(), 'sala_id': 'lobby-69-24-117-72-20668'}
+        self.assertTrue(worker.run(registered))
+        self.assertTrue(worker.run(lobby))
+        capture.assert_called_once()
+        complete = transport.call_args.args[2]
+        self.assertEqual(complete['job_id'], lobby['job_id'])
+        self.assertEqual(complete['snapshot']['sala_id'], lobby['sala_id'])
+        self.assertEqual(complete['snapshot']['consultado_en'], sampled_at)
+
     def test_unsafe_or_expired_jobs_never_launch_enet(self):
         transport=MagicMock(return_value={'ok':True});capture=MagicMock()
         worker=JobWorker(PREVIEW_URL,'unused',parse_allowlist(['69.24.117.72/32']),transport=transport,collector=capture)

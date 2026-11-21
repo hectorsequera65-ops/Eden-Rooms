@@ -1,10 +1,11 @@
 export const VERSION_TTL_MS = 120000;
+export const SCHEDULED_VERSION_TTL_MS = 360000;
 export const VERSION_POLL_MS = 2000;
 const VERSION_FIELDS = ['gameVersion','game_version','gameVer','game_ver','applicationVersion','application_version'];
 const roomIdValid = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(id);
-export function snapshotFresh(timestamp, now = Date.now()) {
+export function snapshotFresh(timestamp, now = Date.now(), ttl = VERSION_TTL_MS) {
   const age = now - Date.parse(timestamp);
-  return Number.isFinite(age) && age >= -30000 && age < VERSION_TTL_MS;
+  return Number.isFinite(age) && age >= -30000 && age < ttl;
 }
 export function virtualIp(player) {
   const raw = player.virtual_ip ?? player.fakeIp ?? player.fake_ip ?? player.virtualIp;
@@ -21,7 +22,9 @@ export function withoutEnetVersion(player) {
   return result;
 }
 export function playerGameVersion(player, now = Date.now()) {
-  if (player?.gameVersionSource === 'enet' && !snapshotFresh(player.gameVersionObservedAt, now)) return '';
+  const source = player?.gameVersionSource;
+  if (source === 'enet' && !snapshotFresh(player.gameVersionObservedAt, now)) return '';
+  if (source === 'enet-scheduled' && !snapshotFresh(player.gameVersionObservedAt, now, SCHEDULED_VERSION_TTL_MS)) return '';
   for (const key of VERSION_FIELDS) {
     const value = player?.[key];
     if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
@@ -41,10 +44,10 @@ export function playerListMarkup(players) {
       + (version ? '<span class="player-version">Versión ' + escapeHTML(version) + '</span>' : '<span class="player-version-unknown">Versión sin consultar</span>') + '</span></div>';
   }).join('');
 }
-export function mergeVersionPlayers(players, observations, {observedAt, now = Date.now()} = {}) {
+export function mergeVersionPlayers(players, observations, {observedAt, now = Date.now(), scheduled = false} = {}) {
   if (!Array.isArray(players) || !Array.isArray(observations)) return players;
   const clean = players.map(withoutEnetVersion);
-  if (observedAt !== undefined && !snapshotFresh(observedAt, now)) return clean;
+  if (observedAt !== undefined && !snapshotFresh(observedAt, now, scheduled ? SCHEDULED_VERSION_TTL_MS : VERSION_TTL_MS)) return clean;
   return clean.map(player => {
     if (!player?.nickname || !player.gameName) return player;
     const sameNames = observations.filter(o => o?.nombre === player.nickname);
@@ -68,7 +71,7 @@ export function mergeVersionPlayers(players, observations, {observedAt, now = Da
     if (playerGameVersion(player, now)) return player; // Keep an explicit version from the lobby.
     return {...player, gameVersion: String(observation.version),
       ...(observation.title_id ? {gameTitleId: observation.title_id} : {}),
-      ...(observedAt !== undefined ? {gameVersionSource: 'enet', gameVersionObservedAt: observedAt} : {})};
+      ...(observedAt !== undefined ? {gameVersionSource: scheduled ? 'enet-scheduled' : 'enet', gameVersionObservedAt: observedAt} : {})};
   });
 }
 export function applyRoomSnapshot(room, snapshot, now = Date.now()) {
@@ -105,7 +108,9 @@ function manualPlayers(room, entry) {
   const players = Array.isArray(room.players) ? room.players.map(withoutEnetVersion) : [];
   if (!entry?.snapshot || entry.address !== room.address || entry.port !== Number(room.port)) return players;
   const observations = entry.snapshot.jugadores;
-  const merged = mergeVersionPlayers(players, observations);
+  const manualBase = players.map(player => player.gameVersionSource === 'enet-scheduled'
+    ? withoutEnetVersion({...player, gameVersionSource:'enet'}) : player);
+  const merged = mergeVersionPlayers(manualBase, observations);
   return players.map((player,index) => {
     if (!entry.eligible.has(identity(player))) return player;
     const ip = virtualIp(player), title = directoryTitle(player);
@@ -117,7 +122,7 @@ function manualPlayers(room, entry) {
         || matches.length !== 1 || virtualIp(matches[0]) === null
         || matches[0].title_id !== title) return player;
     }
-    return merged[index]?.gameVersion && merged[index] !== player ? {...merged[index],
+    return merged[index]?.gameVersion && merged[index] !== manualBase[index] ? {...merged[index],
       gameVersionSource:'enet-card', gameVersionObservedAt:entry.snapshot.consultado_en,
       gameVersionMatch:ip?'name-ip':'name-title'} : player;
   });

@@ -10,12 +10,19 @@ from collector import collect
 class LocalENetTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('EDEN_TEST_CLIENT') and os.environ.get('EDEN_TEST_SERVER'), 'Set compiled local ENet test binaries')
     def test_handshake_and_snapshot(self):
+        for first_snapshot in (False, True):
+            with self.subTest(first_snapshot=first_snapshot):
+                self.check_handshake(first_snapshot)
+
+    def check_handshake(self, first_snapshot):
         fixture=Path(__file__).parent/'fixtures/packet3.hex'
         with subprocess.Popen([os.environ['EDEN_TEST_SERVER'],str(fixture)],stdout=subprocess.PIPE,text=True) as server:
             try:
                 port=int(server.stdout.readline())
                 snapshots=[]
-                collect(os.environ['EDEN_TEST_CLIENT'],{'id':'local','direccion':'127.0.0.1','puerto':port},2,snapshots.append)
+                collect(os.environ['EDEN_TEST_CLIENT'],
+                        {'id':'local','direccion':'127.0.0.1','puerto':port},
+                        2, snapshots.append, first_snapshot=first_snapshot, hard_timeout=4)
                 self.assertEqual(server.wait(timeout=5),0)
                 self.assertEqual(len(snapshots),1)
                 self.assertEqual(len(snapshots[0]['jugadores']),11)

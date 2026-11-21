@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Ubuntu ENet collector. Sending requires --send; otherwise prints snapshots."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+import ipaddress
 from datetime import datetime, timezone
 import json
 from html import unescape
@@ -16,6 +18,8 @@ from urllib.parse import urlsplit
 from protocol import parse_packet3
 
 
+SCHEDULED_PATH = '/api/versiones-programadas'
+SCHEDULED_NICKNAME = 'EdenVersions'
 USER_AGENT = 'EdenRoomsCollector/1.1 (+https://github.com/hectorsequera65-ops/Eden-Rooms)'
 
 
@@ -49,7 +53,7 @@ def api(base, path, payload=None, timeout=15):
         key = os.environ.get('AUTORIZACIONES_API_KEY')
         if key:
             headers['X-Collector-Key'] = key
-    if body is None and path == '/api/versiones-validar':
+    if body is None and path in ('/api/versiones-validar', SCHEDULED_PATH):
         key = os.environ.get('VERSIONES_API_KEY')
         if key:
             headers['X-API-Key'] = key
@@ -119,7 +123,8 @@ class SnapshotPublisher:
         return True
 
 
-def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None):
+def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None, *,
+            first_snapshot=False, timings=None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", nickname):
         raise ValueError("Invalid collector nickname")
     # No shell expansion; one ENet peer; never announce an invented game.
@@ -128,6 +133,11 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
     child_env = {key: value for key, value in os.environ.items()
                  if key not in ('COLLECTOR_API_KEY', 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY')}
     child_env['EDEN_ENET_NICKNAME'] = nickname
+    if timings is not None:
+        child_env['EDEN_ENET_TIMINGS'] = '1'
+    started = time.monotonic()
+    joined = False
+    candidate = None
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           encoding='ascii', errors='replace', env=child_env) as process:
         last_diagnostic = ''
@@ -138,32 +148,51 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
             watchdog.start()
         try:
             for line in process.stdout:
-                if not line.startswith('EDEN_PACKET3 '):
-                    if line.startswith(nickname + ': '):
-                        last_diagnostic = safe_detail(line, 160)
-                    continue
-                timestamp = datetime.now(timezone.utc).isoformat()
-                try:
-                    _, size, encoded = line.strip().split(' ', 2)
-                    packet = bytes.fromhex(encoded)
-                    if len(packet) != int(size):
-                        raise ValueError('Packet length mismatch')
-                    snapshot = parse_packet3(packet)
-                    players = [p for p in snapshot['jugadores']
-                               if p['nombre'] != nickname]
-                    if len(players) > 32:
-                        raise ValueError('API supports at most 32 players')
-                    emit(dict(sala_id=room['id'], consultado_en=timestamp, jugadores=players))
-                    snapshots_received += 1
-                except (ValueError, UnicodeError) as error:
-                    print(f"Rejected snapshot for {room['id']}: {error}", file=sys.stderr)
+                if timings is not None and line.startswith('EDEN_TIMING '):
+                    fields = line.split()
+                    if len(fields) == 3:
+                        _, phase, milliseconds = fields
+                        if phase in ('connect', 'join', 'first_packet') and milliseconds.isdecimal():
+                            timings[phase + '_ms'] = int(milliseconds)
+                elif line.startswith(nickname + ': '):
+                    last_diagnostic = safe_detail(line, 160)
+                    if line.strip() == nickname + ': CONECTADO a la sala':
+                        joined = True
+                elif line.startswith('EDEN_PACKET3 '):
+                    timestamp = datetime.now(timezone.utc).isoformat()
+                    try:
+                        _, size, encoded = line.strip().split(' ', 2)
+                        packet = bytes.fromhex(encoded)
+                        if len(packet) != int(size):
+                            raise ValueError('Packet length mismatch')
+                        snapshot = parse_packet3(packet)
+                        players = [p for p in snapshot['jugadores'] if p['nombre'] != nickname]
+                        if len(players) > 32:
+                            raise ValueError('API supports at most 32 players')
+                        candidate = dict(sala_id=room['id'], consultado_en=timestamp, jugadores=players)
+                        if timings is not None:
+                            timings.setdefault('valid_packet_ms', round((time.monotonic() - started) * 1000))
+                        if not first_snapshot:
+                            emit(candidate)
+                            snapshots_received += 1
+                    except (ValueError, UnicodeError) as error:
+                        print(f"Rejected snapshot for {room['id']}: {error}", file=sys.stderr)
+                if first_snapshot and joined and candidate is not None:
+                    # SIGTERM lets the client exchange the ENet disconnect before exit.
+                    process.terminate()
+                    break
             status = process.wait()
             if status != 0:
                 detail = last_diagnostic if status > 0 else f'terminated by signal {-status}'
                 raise RuntimeError(f'ENet client exited with status {status}: {detail or "no diagnostic"}')
+            if first_snapshot and joined and candidate is not None:
+                emit(candidate)
+                snapshots_received += 1
             if not snapshots_received:
                 raise RuntimeError('No valid snapshots received; nothing sent')
         finally:
+            if timings is not None:
+                timings['collect_ms'] = round((time.monotonic() - started) * 1000)
             if watchdog is not None:
                 watchdog.cancel()
             if process.poll() is None:
@@ -173,6 +202,57 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+
+
+def validate_target(address, port, networks):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        raise ValueError('Only literal public IPv4 targets are accepted') from None
+    if (ip.version != 4 or not ip.is_global or ip.is_multicast or ip.is_reserved
+            or str(ip) != address
+            or (networks is not None and not any(ip in network for network in networks))):
+        raise ValueError('Target is not a permitted public IPv4')
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('Invalid target port')
+    return str(ip), port
+
+
+def collect_public_rooms(base, binary):
+    data = api(base, SCHEDULED_PATH, timeout=6)
+    if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
+        raise ApiError('Invalid scheduled room list')
+
+    rooms = {}
+    for room in data['salas']:
+        if not isinstance(room, dict) or room.get('hasPassword') is not False:
+            continue
+        try:
+            address, port = validate_target(room.get('direccion'), room.get('puerto'), None)
+        except ValueError:
+            continue
+        room_id = f"lobby-{address.replace('.', '-')}-{port}"
+        if room.get('id') == room_id:
+            rooms[room_id] = room
+
+    def sample_and_publish(room):
+        def publish(snapshot):
+            result = api(base, SCHEDULED_PATH, snapshot, timeout=6)
+            if not isinstance(result, dict) or result.get('ok') is not True:
+                raise ApiError('Scheduled snapshot storage not acknowledged')
+        try:
+            collect(binary, room, 5, publish, SCHEDULED_NICKNAME,
+                    hard_timeout=7, first_snapshot=True)
+            return True
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"Scheduled collection failed for {room['id']}: {safe_detail(error)}", file=sys.stderr)
+            return False
+
+    print(f'Eligible rooms: {len(rooms)}', flush=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        published = sum(pool.map(sample_and_publish, rooms.values()))
+    print(f'Published: {published}/{len(rooms)}', flush=True)
+    return int(published != len(rooms))
 
 
 def main():
@@ -186,12 +266,13 @@ def main():
     parser.add_argument('--check-auth', action='store_true', help='Check versions API key once, without ENet or D1 queries/writes')
     send_mode = parser.add_mutually_exclusive_group()
     send_mode.add_argument('--send', action='store_true')
+    send_mode.add_argument('--scheduled', action='store_true', help='Sample and publish the public lobby once')
     send_mode.add_argument('--validate-send', action='store_true', help='POST snapshots to validation-only route, without D1 writes')
     parser.add_argument('--room-id', help='Query only this exact registered room ID')
     parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME', 'sralcer'))
     args = parser.parse_args()
-    if sum((args.check_api, args.check_auth, args.send, args.validate_send)) > 1:
-        parser.error("Choose only one of --check-api, --check-auth, --send, --validate-send")
+    if sum((args.check_api, args.check_auth, args.send, args.validate_send, args.scheduled)) > 1:
+        parser.error("Choose only one check or publication mode")
     if args.room_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", args.room_id):
         parser.error("--room-id must be one nonempty registered room ID")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
@@ -202,8 +283,16 @@ def main():
         parser.error('A clean HTTPS base URL is required')
     if not 1 <= args.duration <= 600 or args.interval < 1:
         parser.error('Invalid duration/interval')
-    if (args.send or args.validate_send or args.check_auth) and not os.environ.get('VERSIONES_API_KEY'):
-        parser.error('VERSIONES_API_KEY is required for --send, --validate-send or --check-auth')
+    if args.scheduled and args.room_id is not None:
+        parser.error('--scheduled always processes the public lobby')
+    if (args.send or args.validate_send or args.check_auth or args.scheduled) and not os.environ.get('VERSIONES_API_KEY'):
+        parser.error('VERSIONES_API_KEY is required for publishing or checking versions')
+    if args.scheduled:
+        try:
+            return collect_public_rooms(base, args.client)
+        except ApiError as error:
+            print(safe_detail(error), file=sys.stderr)
+            return 1
     publisher = SnapshotPublisher(base, validate_only=args.validate_send)
     while True:
         failed = False

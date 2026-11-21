@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 import ipaddress
 import os
 import re
@@ -11,9 +12,11 @@ import sys
 import threading
 import time
 import uuid
-from collector import api, collect, ApiError, safe_detail
+from collector import api, collect, ApiError, safe_detail, validate_target
 
 PREVIEW_URL='https://test-enet-versions-sralcer.eden-rooms.pages.dev'
+SNAPSHOT_CACHE_SECONDS = 2
+SNAPSHOT_CACHE_SIZE = 32
 
 
 def parse_allowlist(values):
@@ -29,25 +32,18 @@ def parse_allowlist(values):
     return networks
 
 
-def validate_target(address,port,networks):
-    try:ip=ipaddress.ip_address(address)
-    except ValueError:raise ValueError('Only literal public IPv4 targets are accepted') from None
-    if (ip.version!=4 or not ip.is_global or ip.is_multicast or ip.is_reserved
-            or str(ip)!=address or (networks is not None and not any(ip in network for network in networks))):
-        raise ValueError('Target is not a permitted public IPv4')
-    if type(port) is not int or not 1<=port<=65535:
-        raise ValueError('Invalid target port')
-    return str(ip),port
-
-
 class JobWorker:
     def __init__(self,base,binary,networks,transport=None,collector=None,now=None):
         if base.rstrip('/')!=PREVIEW_URL:
             raise ValueError('Only the configured Preview URL is supported')
         self.base=base.rstrip('/');self.binary=binary;self.networks=networks
         self.transport=transport or (lambda base,path,data:api(base,path,data,timeout=6))
-        self.collector=collector or collect
+        self.collector = collector or partial(collect, first_snapshot=True)
+        self.collector_reports_timings = collector is None
         self.now=now or time.time
+        self.targets = set()
+        self.snapshots = {}
+        self.target_changed = threading.Condition()
 
     def request(self,data):return self.transport(self.base,'/api/collector/jobs',data)
 
@@ -59,6 +55,9 @@ class JobWorker:
 
     def run(self,job):
         identity={}
+        target = None
+        timings = {}
+        started = time.monotonic()
         try:
             if not isinstance(job,dict):raise ValueError('Invalid job')
             for key in ('job_id','lease_token'):
@@ -76,20 +75,36 @@ class JobWorker:
             if deadline.tzinfo is None:raise ValueError('Deadline must have timezone')
             remaining=deadline.timestamp()-self.now()
             if remaining<10 or remaining>35:raise ValueError('Job lease is expired or invalid')
-            # Leave time for the HTTPS completion. The C client also needs
-            # up to one second to disconnect after the sampling window.
-            hard_timeout=min(11,remaining-7)
-            duration=min(8,int(hard_timeout)-2)
-            snapshot=None
-
-            def keep_latest(sample):
-                nonlocal snapshot
-                snapshot=sample
-            self.collector(self.binary,{'id':job['sala_id'],'direccion':address,'puerto':port},duration,
-                           keep_latest,'sralcer',hard_timeout=hard_timeout)
+            # Aliases can refer to the same room. Keep the fixed nickname
+            # exclusive to one ENet connection per endpoint on this worker.
+            with self.target_changed:
+                endpoint = (address, port)
+                if not self.target_changed.wait_for(
+                    lambda: endpoint not in self.targets, timeout=max(0, remaining - 10)
+                ):
+                    raise ValueError('Another job is still sampling this endpoint')
+                target = endpoint
+                self.targets.add(target)
+            remaining = deadline.timestamp() - self.now()
+            if remaining < 10:
+                raise ValueError('Insufficient lease time after waiting for endpoint')
+            hard_timeout = min(7, remaining - 7)
+            duration = min(5, int(hard_timeout) - 2)
+            room = {'id': job['sala_id'], 'direccion': address, 'puerto': port}
+            enet_started = time.monotonic()
+            timings['dispatch_ms'] = round((enet_started - started) * 1000)
+            try:
+                snapshot = self.sample(room, target, duration, hard_timeout, timings)
+            finally:
+                self.release_target(target)
+                target = None
             if snapshot is None:raise ValueError('No valid ENet snapshot')
             if self.now()>=deadline.timestamp()-1:raise ValueError('Job expired before completion')
-            result=self.request({'action':'complete',**identity,'snapshot':snapshot})
+            completing = time.monotonic()
+            try:
+                result=self.request({'action':'complete',**identity,'snapshot':snapshot})
+            finally:
+                timings['complete_ms'] = round((time.monotonic() - completing) * 1000)
             if not isinstance(result,dict) or result.get('ok') is not True:raise ApiError('Completion not acknowledged')
             return True
         except Exception as error:
@@ -99,6 +114,50 @@ class JobWorker:
                 except Exception as failure:
                     print(f'Could not report ENet job failure: {safe_detail(failure)}',file=sys.stderr)
             return False
+        finally:
+            if target is not None:
+                self.release_target(target)
+            if identity:
+                timings['job_ms'] = round((time.monotonic() - started) * 1000)
+                fields = ' '.join(f'{key}={value}' for key, value in timings.items())
+                print(f"ENet job timing id={identity['job_id']} {fields}", flush=True)
+
+    def sample(self, room, target, duration, hard_timeout, timings):
+        with self.target_changed:
+            cached = self.snapshots.get(target)
+            if cached and time.monotonic() - cached[0] < SNAPSHOT_CACHE_SECONDS:
+                timings['cache_hit'] = 1
+                return dict(cached[1], sala_id=room['id'])
+
+        sample = None
+        received = None
+
+        def keep_latest(snapshot):
+            nonlocal sample, received
+            sample = snapshot
+            received = time.monotonic()
+
+        started = time.monotonic()
+        try:
+            options = {'timings': timings} if self.collector_reports_timings else {}
+            self.collector(self.binary, room, duration, keep_latest, 'sralcer',
+                           hard_timeout=hard_timeout, **options)
+        finally:
+            timings.setdefault('collect_ms', round((time.monotonic() - started) * 1000))
+        if sample is not None:
+            # A second request can reuse this successful sample without
+            # reconnecting during the room's join rate limit.
+            with self.target_changed:
+                self.snapshots.pop(target, None)
+                self.snapshots[target] = (received, sample)
+                if len(self.snapshots) > SNAPSHOT_CACHE_SIZE:
+                    del self.snapshots[next(iter(self.snapshots))]
+        return sample
+
+    def release_target(self, target):
+        with self.target_changed:
+            self.targets.remove(target)
+            self.target_changed.notify_all()
 
 
 def main():
@@ -106,7 +165,7 @@ def main():
     parser.add_argument('--base-url',default=PREVIEW_URL)
     parser.add_argument('--client',default='/opt/eden-rooms-enet/eden-collector')
     parser.add_argument('--workers',type=int,choices=(1,2),default=2)
-    parser.add_argument('--poll-seconds',type=float,default=3)
+    parser.add_argument('--poll-seconds',type=float,default=2)
     parser.add_argument('--allow-cidr',action='append',default=[])
     parser.add_argument('--once',action='store_true',help='Claim and process at most one job, then exit')
     args=parser.parse_args()
@@ -123,24 +182,42 @@ def main():
             return int(not worker.run(job)) if job else 0
         except Exception as error:
             print(f'Job poll failed: {safe_detail(error)}',file=sys.stderr);return 1
-    stop=threading.Event()
-    signal.signal(signal.SIGTERM,lambda *_:stop.set())
-    signal.signal(signal.SIGINT,lambda *_:stop.set())
-    failures=0
+    stop = threading.Event()
+    wake = threading.Event()
+
+    def shutdown(*_):
+        stop.set()
+        wake.set()
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    failures = 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        active=set()
+        active = set()
         while not stop.is_set():
-            active={future for future in active if not future.done()}
-            if len(active)>=args.workers:
-                stop.wait(0.5);continue
+            wake.clear()
+            if stop.is_set():
+                break
+            active = {future for future in active if not future.done()}
+            if len(active) >= args.workers:
+                wake.wait()
+                continue
             try:
-                job=worker.claim();failures=0
-                if job:active.add(pool.submit(worker.run,job))
-                else:stop.wait(args.poll_seconds)
+                claim_started = time.monotonic()
+                job = worker.claim()
+                failures = 0
+                if job:
+                    claim_ms = round((time.monotonic() - claim_started) * 1000)
+                    print(f'ENet claim timing claim_ms={claim_ms}', flush=True)
+                    future = pool.submit(worker.run, job)
+                    active.add(future)
+                    future.add_done_callback(lambda _: wake.set())
+                else:
+                    wake.wait(args.poll_seconds)
             except Exception as error:
-                failures+=1
-                print(f'Job poll failed: {safe_detail(error)}',file=sys.stderr)
-                stop.wait(min(30,args.poll_seconds*2**min(failures,3)))
+                failures += 1
+                print(f'Job poll failed: {safe_detail(error)}', file=sys.stderr)
+                stop.wait(min(30, args.poll_seconds * 2**min(failures, 3)))
     return 0
 
 if __name__=='__main__':raise SystemExit(main())
