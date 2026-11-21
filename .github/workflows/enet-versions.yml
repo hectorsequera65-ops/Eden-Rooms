@@ -1,0 +1,61 @@
+name: ENet versions
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enet-versions-preview
+  cancel-in-progress: false
+
+jobs:
+  versions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      EDEN_PAGES_URL: https://test-enet-versions-sralcer.eden-rooms.pages.dev
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build ENet client and test server
+        run: |
+          mkdir -p work/enet-actions/deps work/enet-actions/apt/lists/partial
+          cd work/enet-actions
+          apt_options=(-o "Dir::State::lists=$PWD/apt/lists" -o Dir::Etc::parts=-)
+          apt-get "${apt_options[@]}" update
+          apt-get "${apt_options[@]}" download libenet-dev libenet7
+          for package in ./*.deb; do dpkg-deb -x "$package" deps; done
+          enet_lib="deps/usr/lib/$(cc -print-multiarch)"
+          cc -O2 -Wall -Wextra -Werror -Ideps/usr/include ../../backend/enet/client.c \
+            -L"$enet_lib" -Wl,-rpath,"\$ORIGIN/$enet_lib" -lenet -o eden-collector
+          cc -O2 -Wall -Wextra -Werror -Ideps/usr/include ../../tests/enet_mock.c \
+            -L"$enet_lib" -Wl,-rpath,"\$ORIGIN/$enet_lib" -lenet -o enet-mock
+
+      - name: Run local tests
+        run: |
+          export EDEN_TEST_CLIENT="$PWD/work/enet-actions/eden-collector"
+          export EDEN_TEST_SERVER="$PWD/work/enet-actions/enet-mock"
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          node --test tests/*.test.mjs
+
+      - name: Publish public room versions to Cloudflare Preview
+        if: vars.EDEN_ENET_PUBLISH == 'true'
+        env:
+          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+        run: |
+          timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
+            --client ./work/enet-actions/eden-collector --scheduled
