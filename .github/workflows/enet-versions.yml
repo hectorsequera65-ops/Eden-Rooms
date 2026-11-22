@@ -2,6 +2,14 @@ name: ENet versions
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Execution mode
+        type: choice
+        default: collect
+        options:
+          - collect
+          - check-auth
   schedule:
     - cron: '*/5 * * * *'
 
@@ -13,7 +21,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check-auth:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check-auth'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/enet-versions-sralcer
+          persist-credentials: false
+
+      - name: Check versions API authentication
+        env:
+          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+        run: python3 backend/enet/collector.py --base-url https://test-enet-versions-sralcer.eden-rooms.pages.dev --check-auth
+
   versions:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'check-auth'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
