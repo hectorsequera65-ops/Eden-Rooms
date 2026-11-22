@@ -27,18 +27,22 @@ test('scheduled Preview lists eligible rooms, revalidates writes and displays fr
     {...room, address:'1.1.1.1'}, {...room, address:'1.1.1.1', hasPassword:true},
     {...room, address:'8.8.4.4', hasPassword:undefined}, {...room, address:'127.0.0.1'}];
   mock.method(globalThis, 'fetch', async () => Response.json({rooms:lobby}));
-  const env = {DB, ENET_JOBS_ENABLED:'true', ENET_SCHEDULED_ENABLED:'true', VERSIONES_API_KEY:'fixture-key'};
-  const context = (body, {key = 'fixture-key', host = PREVIEW_HOST} = {}) => ({
+  const env = {DB, ENET_JOBS_ENABLED:'true', ENET_SCHEDULED_ENABLED:'true', VERSIONES_API_KEY:'fixture-key', ENET_PREVIEW_API_KEY:'preview-fixture'};
+  const context = (body, {key = 'fixture-key', host = PREVIEW_HOST, preview = false} = {}) => ({
     env, request:new Request(`https://${host}/api/versiones-programadas`, {
       method:body ? 'POST' : 'GET',
-      headers:{'X-API-Key':key, 'Content-Type':'application/json'},
+      headers:{[preview ? 'X-ENet-Preview-Key' : 'X-API-Key']:key, 'Content-Type':'application/json'},
       body:body && JSON.stringify(body)
     })
   });
   const id = 'lobby-8-8-8-8-20668';
   assert.equal((await onRequestGet(context(null, {host:'example.test'}))).status, 404);
   assert.equal((await onRequestGet(context(null, {key:'invalid'}))).status, 401);
-  const listed = await onRequestGet(context(null));
+  assert.equal((await onRequestGet(context(null))).status, 200);
+  const preview = {preview:true, key:'preview-fixture'};
+  assert.equal((await onRequestGet(context(null, {preview:true}))).status, 401);
+  assert.equal((await onRequestGet(context(null, {...preview, host:'eden-rooms.pages.dev'}))).status, 404);
+  const listed = await onRequestGet(context(null, preview));
   assert.equal(listed.headers.get('Cache-Control'), 'no-store');
   assert.deepEqual(await listed.json(), {salas:[{id, direccion:room.address, puerto:room.port, hasPassword:false}]});
 
@@ -47,7 +51,7 @@ test('scheduled Preview lists eligible rooms, revalidates writes and displays fr
   room.hasPassword = true;
   assert.equal((await onRequestPost(context(sample))).status, 409);
   room.hasPassword = false;
-  assert.equal((await onRequestPost(context(sample))).status, 200);
+  assert.equal((await onRequestPost(context(sample, preview))).status, 200);
   const older = {...sample, consultado_en:new Date(Date.parse(sample.consultado_en)-1000).toISOString(), jugadores:[]};
   assert.equal((await onRequestPost(context(older))).status, 200);
   const readRooms = async () => (await (await publicRooms(context())).json()).rooms;

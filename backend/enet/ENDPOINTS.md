@@ -25,7 +25,7 @@ No se afirma haber observado el HTML ni probado las claves del entorno remoto.
 | Método/ruta | En d1601d3 | Código actual de la rama | Efectos |
 | --- | --- | --- | --- |
 | GET /api/autorizaciones | Sí | Sí | Lee salas autorizadas; clave de lectura opcional |
-| GET /api/versiones-validar | No | Nuevo | Comprueba VERSIONES_API_KEY, sin consultas D1 |
+| GET /api/versiones-validar | No | Nuevo | Comprueba la clave de versiones, sin consultas D1 |
 | POST /api/versiones-validar | No | Nuevo | Autentica y valida snapshot con lecturas D1; no escribe |
 | POST /api/versiones-multiples | Sí | Sí, misma interfaz | Autentica y guarda snapshot por sala_id |
 | GET /api/versiones-sala?id=... | Sí | Sin cambios | Lee snapshot vigente de una sala autorizada |
@@ -39,7 +39,13 @@ exacta; verificar además el mismo binding DB en todas las rutas del entorno.
 ## GET: prueba exclusiva de autenticación
 
 Solicitud: X-API-Key en encabezado; sin body, sin query de secretos, sin ENet.
-Usa la misma función de autenticación que /api/versiones-multiples.
+El cliente heredado utiliza `X-API-Key` con `VERSIONES_API_KEY`. En el alias
+HTTPS `test-enet-versions-sralcer.eden-rooms.pages.dev`, el workflow ENet
+utiliza `X-ENet-Preview-Key` con `ENET_PREVIEW_API_KEY`. La clave de Preview
+también habilita GET/POST de `/api/versiones-programadas` con los controles
+existentes. Cada encabezado se valida contra su propia clave. Los POST de
+`/api/versiones-validar`, `/api/versiones-multiples` y `/api/versiones`
+conservan la autenticación heredada.
 
 - Secreto de servidor ausente: 503 JSON.
 - Clave ausente, incorrecta o solo clave de lectura: 401 JSON.

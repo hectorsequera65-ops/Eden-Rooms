@@ -6,7 +6,7 @@ function guard(request, env) {
   if (!previewOnly(request, env) || env.ENET_SCHEDULED_ENABLED !== 'true') {
     return respond({error:'No disponible'}, 404);
   }
-  return authorizeVersionRequest(request, env) ||
+  return authorizeVersionRequest(request, env, {allowPreview:true}) ||
     (!env.DB ? respond({error:'Base de datos no configurada'}, 503) : null);
 }
 

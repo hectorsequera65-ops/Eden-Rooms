@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend/enet'))
-from collector import ApiError, NoRedirect, USER_AGENT, api, main
+from collector import ApiError, NoRedirect, PREVIEW_URL, USER_AGENT, api, main
 
 class CollectorHTTPTests(unittest.TestCase):
     def response(self, payload):
@@ -30,6 +30,47 @@ class CollectorHTTPTests(unittest.TestCase):
         self.assertIsNone(get.get_header('X-api-key'))
         self.assertEqual(post.get_header('X-api-key'),'write-secret')
         self.assertIsNone(post.get_header('X-collector-key'))
+
+    def test_preview_auth_checks_once_and_never_falls_back_or_sends_off_host(self):
+        opener = MagicMock()
+        result = {'endpoint':'versiones-validar', 'contrato':1, 'modo':'autenticacion',
+                  'autenticado':True, 'escritura':False, 'extra':'preview-fixture'}
+        opener.open.return_value = self.response(result)
+        with patch.dict(os.environ, {'ENET_PREVIEW_API_KEY':'preview-fixture',
+                                    'VERSIONES_API_KEY':'legacy-fixture'}), \
+             patch('collector.urllib.request.build_opener', return_value=opener), \
+             patch('sys.argv', ['collector.py', '--base-url', PREVIEW_URL, '--check-auth']), \
+             patch('collector.collect') as collect, patch('sys.stdout', new_callable=io.StringIO) as stdout:
+            self.assertEqual(main(), 0)
+            collect.assert_not_called()
+            self.assertNotIn('preview-fixture', stdout.getvalue())
+            opener.open.assert_called_once()
+            request = opener.open.call_args.args[0]
+            self.assertEqual(request.full_url, PREVIEW_URL + '/api/versiones-validar')
+            self.assertEqual(request.get_method(), 'GET')
+            self.assertIsNone(request.data)
+            self.assertEqual(request.get_header('X-enet-preview-key'), 'preview-fixture')
+            self.assertIsNone(request.get_header('X-api-key'))
+            with self.assertRaises(ApiError):
+                api('https://example.test', '/api/versiones-validar')
+            with patch.dict(os.environ, {'ENET_PREVIEW_API_KEY':''}):
+                with self.assertRaises(ApiError):
+                    api(PREVIEW_URL, '/api/versiones-validar')
+            opener.open.assert_called_once()
+
+    def test_scheduled_preview_uses_only_preview_header_for_get_and_post(self):
+        opener = MagicMock()
+        opener.open.side_effect = [self.response({'salas':[]}), self.response({'ok':True})]
+        with patch.dict(os.environ, {'ENET_PREVIEW_API_KEY':'preview-fixture',
+                                    'VERSIONES_API_KEY':'legacy-fixture'}), \
+             patch('collector.urllib.request.build_opener', return_value=opener):
+            api(PREVIEW_URL, '/api/versiones-programadas')
+            api(PREVIEW_URL, '/api/versiones-programadas', {'jugadores':[]})
+        requests = [call.args[0] for call in opener.open.call_args_list]
+        self.assertEqual([request.get_method() for request in requests], ['GET', 'POST'])
+        for request in requests:
+            self.assertEqual(request.get_header('X-enet-preview-key'), 'preview-fixture')
+            self.assertIsNone(request.get_header('X-api-key'))
 
     def test_cloudflare_403_has_reason_ray_and_sanitized_details(self):
         body=b'<html><style>hidden</style><h1>Error 1010: Access denied</h1><p>browser_signature_banned</p><script>secret_script()</script></html>'
