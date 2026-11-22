@@ -251,6 +251,9 @@ def collect_public_rooms(base, binary):
     if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
         raise ApiError('Invalid scheduled room list')
 
+    if data.get('storage') != 'ENET_PREVIEW_DB':
+        raise ApiError('Scheduled API did not confirm the ENET_PREVIEW_DB contract')
+
     rooms = {}
     for room in data['salas']:
         if not isinstance(room, dict) or room.get('hasPassword') is not False:

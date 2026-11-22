@@ -14,8 +14,15 @@ export async function onRequestGet({request, env}) {
   const denied = guard(request, env);
   if (denied) return denied;
   try {
+    await env.ENET_PREVIEW_DB.prepare(
+      'SELECT sala_id, jugadores_json, actualizado_en FROM enet_scheduled_snapshots LIMIT 0'
+    ).first();
+  } catch {
+    return respond({error:'Esquema de Preview no disponible'}, 503);
+  }
+  try {
     const lobby = await readLobby({fresh:true});
-    return respond({salas:[...listEligibleLobbyRooms(lobby)].map(([id, room]) => ({
+    return respond({storage:'ENET_PREVIEW_DB', salas:[...listEligibleLobbyRooms(lobby)].map(([id, room]) => ({
       id, direccion:room.address, puerto:Number(room.port), hasPassword:false
     }))});
   } catch {

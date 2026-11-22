@@ -13,7 +13,7 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
   const ENET_PREVIEW_DB = {
     prepare(sql) {
       const statement = db.prepare(sql);
-      return {bind: (...values) => ({
+      return {first: () => statement.get(), bind: (...values) => ({
         first: () => statement.get(...values),
         run: () => statement.run(...values)
       })};
@@ -52,7 +52,7 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
   assert.equal((await onRequestGet(context(null, {...preview, host:'eden-rooms.pages.dev'}))).status, 404);
   const listed = await onRequestGet(context(null, preview));
   assert.equal(listed.headers.get('Cache-Control'), 'no-store');
-  assert.deepEqual(await listed.json(), {salas:[{id, direccion:room.address, puerto:room.port, hasPassword:false}]});
+  assert.deepEqual(await listed.json(), {storage:'ENET_PREVIEW_DB', salas:[{id, direccion:room.address, puerto:room.port, hasPassword:false}]});
 
   const sample = {sala_id:id, consultado_en:new Date().toISOString(),
     jugadores:[{nombre:'Player', juego:'Game', virtual_ip:'10.0.0.2', version:'1.2.3'}]};
@@ -68,4 +68,6 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
   assert.deepEqual((await (await readPublished()).json()).jugadores, sample.jugadores);
   room.hasPassword = true;
   assert.equal((await (await readPublished()).json()).disponible, false);
+  db.exec('DROP TABLE enet_scheduled_snapshots');
+  assert.equal((await onRequestGet(context(null))).status, 503);
 });
