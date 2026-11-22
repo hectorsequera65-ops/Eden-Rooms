@@ -2,6 +2,11 @@ name: ENet versions
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to Cloudflare Preview after local tests
+        type: boolean
+        default: false
   schedule:
     - cron: '*/5 * * * *'
 
@@ -14,6 +19,8 @@ concurrency:
 
 jobs:
   versions:
+    if: github.ref == 'refs/heads/main'
+    environment: enet-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
@@ -53,9 +60,9 @@ jobs:
           node --test tests/*.test.mjs
 
       - name: Publish public room versions to Cloudflare Preview
-        if: vars.EDEN_ENET_PUBLISH == 'true'
+        if: vars.EDEN_ENET_PUBLISH == 'true' && (github.event_name == 'schedule' || inputs.publish)
         env:
-          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+          ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: |
           timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
             --client ./work/enet-actions/eden-collector --scheduled
