@@ -68,7 +68,7 @@ class GameProtocolTests(unittest.TestCase):
     def test_collector_emits_smash_snapshot_without_decoding_binary_packet_as_text(self):
         raw=build_packet('Super Smash Bros. Ultimate','01006A800016E000',['13.0.2','13.0.3','13.0.4','13.0.5','7.0.0'],binary_headers=True)
         process=MagicMock()
-        process.stdout=[f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n']
+        process.stdout=[f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n', 'sralcer: CONECTADO a la sala\n']
         process.wait.return_value=0;process.poll.return_value=0
         process.__enter__.return_value=process
         snapshots=[]

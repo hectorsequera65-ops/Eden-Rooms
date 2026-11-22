@@ -5,7 +5,7 @@ import subprocess
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend/enet'))
-from collector import collect
+from collector import RoomUnavailable, collect
 
 class LocalENetTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('EDEN_TEST_CLIENT') and os.environ.get('EDEN_TEST_SERVER'), 'Set compiled local ENet test binaries')
@@ -13,6 +13,25 @@ class LocalENetTest(unittest.TestCase):
         for first_snapshot in (False, True):
             with self.subTest(first_snapshot=first_snapshot):
                 self.check_handshake(first_snapshot)
+
+    @unittest.skipUnless(os.environ.get('EDEN_TEST_CLIENT') and os.environ.get('EDEN_TEST_SERVER'), 'Set compiled local ENet test binaries')
+    def test_protocol_rejection_reports_server_version_without_publishing(self):
+        fixture = Path(__file__).parent / 'fixtures/packet3.hex'
+        command = [os.environ['EDEN_TEST_SERVER'], str(fixture), 'mismatch']
+        with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as server:
+            try:
+                port = int(server.stdout.readline())
+                snapshots = []
+                with self.assertRaisesRegex(RoomUnavailable, r'cliente 1, servidor 258'):
+                    collect(os.environ['EDEN_TEST_CLIENT'],
+                            {'id': 'local', 'direccion': '127.0.0.1', 'puerto': port},
+                            2, snapshots.append, hard_timeout=4)
+                self.assertEqual(snapshots, [])
+                self.assertEqual(server.wait(timeout=5), 0)
+            finally:
+                if server.poll() is None:
+                    server.kill()
+                    server.wait()
 
     def check_handshake(self, first_snapshot):
         fixture=Path(__file__).parent/'fixtures/packet3.hex'

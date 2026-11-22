@@ -31,6 +31,14 @@ class ApiError(RuntimeError):
     """A bounded, redacted API diagnostic safe to print to the service journal."""
 
 
+class RoomUnavailable(RuntimeError):
+    """The client could not obtain a valid snapshot from this room."""
+
+
+class ClientError(RuntimeError):
+    """The ENet client failed locally or terminated abnormally."""
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Never forward collector credentials to a redirect destination.
@@ -149,6 +157,8 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None,
     started = time.monotonic()
     joined = False
     candidate = None
+    rejected_snapshot = False
+    stopping_after_snapshot = False
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           encoding='ascii', errors='replace', env=child_env) as process:
         last_diagnostic = ''
@@ -169,7 +179,7 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None,
                     last_diagnostic = safe_detail(line, 160)
                     if line.strip() == nickname + ': CONECTADO a la sala':
                         joined = True
-                elif line.startswith('EDEN_PACKET3 '):
+                elif line.startswith('EDEN_PACKET3 ') and not stopping_after_snapshot:
                     timestamp = datetime.now(timezone.utc).isoformat()
                     try:
                         _, size, encoded = line.strip().split(' ', 2)
@@ -183,24 +193,30 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None,
                         candidate = dict(sala_id=room['id'], consultado_en=timestamp, jugadores=players)
                         if timings is not None:
                             timings.setdefault('valid_packet_ms', round((time.monotonic() - started) * 1000))
-                        if not first_snapshot:
-                            emit(candidate)
-                            snapshots_received += 1
-                    except (ValueError, UnicodeError) as error:
+                    except ValueError as error:
+                        rejected_snapshot = True
                         print(f"Rejected snapshot for {room['id']}: {error}", file=sys.stderr)
-                if first_snapshot and joined and candidate is not None:
-                    # SIGTERM lets the client exchange the ENet disconnect before exit.
-                    process.terminate()
-                    break
+                if joined and candidate is not None and not stopping_after_snapshot:
+                    if first_snapshot:
+                        # SIGTERM lets the client exchange the ENet disconnect before exit.
+                        process.terminate()
+                        stopping_after_snapshot = True
+                    else:
+                        emit(candidate)
+                        snapshots_received += 1
+                        candidate = None
             status = process.wait()
             if status != 0:
                 detail = last_diagnostic if status > 0 else f'terminated by signal {-status}'
-                raise RuntimeError(f'ENet client exited with status {status}: {detail or "no diagnostic"}')
+                error_type = RoomUnavailable if status == 1 else ClientError
+                raise error_type(f'ENet client exited with status {status}: {detail or "no diagnostic"}')
             if first_snapshot and joined and candidate is not None:
                 emit(candidate)
                 snapshots_received += 1
             if not snapshots_received:
-                raise RuntimeError('No valid snapshots received; nothing sent')
+                if rejected_snapshot:
+                    raise ClientError('No compatible snapshot could be decoded')
+                raise RoomUnavailable('No valid snapshots received')
         finally:
             if timings is not None:
                 timings['collect_ms'] = round((time.monotonic() - started) * 1000)
@@ -254,16 +270,27 @@ def collect_public_rooms(base, binary):
         try:
             collect(binary, room, 5, publish, SCHEDULED_NICKNAME,
                     hard_timeout=7, first_snapshot=True)
-            return True
-        except (OSError, RuntimeError, ValueError) as error:
-            print(f"Scheduled collection failed for {room['id']}: {safe_detail(error)}", file=sys.stderr)
-            return False
+            return 'published'
+        except RoomUnavailable as error:
+            print(f"Room unavailable {room['id']}: {safe_detail(error)}", file=sys.stderr)
+            return 'unavailable'
+        except ApiError as error:
+            print(f"Publication failed for {room['id']}: {safe_detail(error)}", file=sys.stderr)
+            return 'publication_error'
+        except (ClientError, OSError) as error:
+            print(f"ENet client error for {room['id']}: {safe_detail(error)}", file=sys.stderr)
+            return 'client_error'
 
     print(f'Eligible rooms: {len(rooms)}', flush=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        published = sum(pool.map(sample_and_publish, rooms.values()))
+        outcomes = list(pool.map(sample_and_publish, rooms.values()))
+    published = outcomes.count('published')
+    publication_errors = outcomes.count('publication_error')
+    client_errors = outcomes.count('client_error')
     print(f'Published: {published}/{len(rooms)}', flush=True)
-    return int(published != len(rooms))
+    print(f"Unavailable rooms: {outcomes.count('unavailable')}; "
+          f'publication errors: {publication_errors}; client errors: {client_errors}', flush=True)
+    return int(bool(publication_errors or client_errors))
 
 
 def main():

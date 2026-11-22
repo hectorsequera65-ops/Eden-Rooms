@@ -48,7 +48,8 @@ class ProtocolTests(unittest.TestCase):
         first=packet([('sralcer',[10,0,0,1],'',''),('Ana',[10,0,0,2],'Game','1.0')])
         empty=packet([])
         process=MagicMock()
-        process.stdout=[f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n' for raw in [first,empty]]
+        process.stdout=['sralcer: CONECTADO a la sala\n',
+                        *(f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n' for raw in [first,empty])]
         process.wait.return_value=0
         process.poll.return_value=0
         process.__enter__.return_value=process
@@ -61,7 +62,7 @@ class ProtocolTests(unittest.TestCase):
     def test_custom_collector_name_is_forwarded_and_filtered(self):
         raw=packet([('custom_probe',[10,0,0,1],'',''),('Ana',[10,0,0,2],'Game','1.0')])
         process=MagicMock()
-        process.stdout=[f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n']
+        process.stdout=[f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n', 'custom_probe: CONECTADO a la sala\n']
         process.wait.return_value=0
         process.poll.return_value=0
         process.__enter__.return_value=process

@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <time.h>
 
+enum { ROOM_PROTOCOL_VERSION = 1 };
+
 static const char *names[1] = {"sralcer"};
 static volatile sig_atomic_t stop_requested;
 static void stop_handler(int sig) { (void)sig; stop_requested = 1; }
@@ -30,7 +32,7 @@ static int join_room(ENetPeer *peer, int index, const char *password) {
     u32(buf + pos, (uint32_t)n); pos += 4;
     memcpy(buf + pos, name, n); pos += n;
     memset(buf + pos, 255, 4); pos += 4; // automatically assigned fake IP
-    u32(buf + pos, 1); pos += 4; // Eden network_version
+    u32(buf + pos, ROOM_PROTOCOL_VERSION); pos += 4;
     u32(buf + pos, (uint32_t)pw); pos += 4;
     memcpy(buf + pos, password, pw); pos += pw;
     u32(buf + pos, 0); pos += 4; // empty verification token
@@ -38,6 +40,10 @@ static int join_room(ENetPeer *peer, int index, const char *password) {
     if (!packet) return -1;
     if (enet_peer_send(peer, 0, packet) < 0) { enet_packet_destroy(packet); return -1; }
     return 0;
+}
+static void report_join_timeout(const char *name, int transport_connected, int seconds) {
+    const char *phase = transport_connected ? "sin confirmacion de ingreso" : "sin conexion ENet";
+    fprintf(stderr, "%s: %s en %d s\n", name, phase, seconds);
 }
 static const char *reason(unsigned char id) {
     switch (id) {
@@ -76,10 +82,15 @@ int main(int argc, char **argv) {
     }
     int timings = getenv("EDEN_ENET_TIMINGS") != NULL;
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (enet_initialize() < 0) return 1;
+    if (enet_initialize() < 0) {
+        fprintf(stderr, "%s: no se pudo inicializar ENet\n", nickname);
+        return 2;
+    }
     ENetAddress address = {0}; address.port = (enet_uint16)port;
     if (enet_address_set_host(&address, argv[1]) < 0) {
-        fputs("No se pudo resolver el servidor.\n", stderr); enet_deinitialize(); return 1;
+        fprintf(stderr, "%s: no se pudo resolver el servidor\n", nickname);
+        enet_deinitialize();
+        return 2;
     }
     ENetHost *hosts[1] = {0};
     signal(SIGINT, stop_handler); signal(SIGTERM, stop_handler);
@@ -87,7 +98,7 @@ int main(int argc, char **argv) {
     int state[1] = {0}, ever[1] = {0}; // 0 waiting, 1 connecting, 2 joined, 3 ended
     uint64_t sent[1] = {0}, connected_at = 0;
     int reported_packet = 0;
-    int started = 0, failed = 0;
+    int started = 0, failed = 0, local_error = 0;
     uint64_t start = now_ms(), next = start;
     printf("Destino: %s:%d | Usuarios: %d | Duracion: %d s\n", argv[1], port, count, duration);
     puts("Eden Rooms collector: one connection, no game announcement.");
@@ -100,7 +111,7 @@ int main(int argc, char **argv) {
             peers[i] = hosts[i] ? enet_host_connect(hosts[i], &address, 1, 0) : NULL;
             state[i] = peers[i] ? 1 : 3; sent[i] = now;
             printf("%s: %s\n", names[i], peers[i] ? "conectando..." : "no se pudo crear la conexion");
-            if (!peers[i]) failed = 1;
+            if (!peers[i]) local_error = 1;
             next = now + 10000;
         }
         for (int i = 0; i < started; ++i) {
@@ -109,7 +120,7 @@ int main(int argc, char **argv) {
             int result = enet_host_service(hosts[i], &event, 0);
             if (result < 0) {
                 if (state[i] != 3) printf("%s: error de red local\n", names[i]);
-                state[i] = 3; failed = 1; continue;
+                state[i] = 3; local_error = 1; continue;
             }
             if (result == 0) continue;
             if (state[i] != 3) {
@@ -118,7 +129,7 @@ int main(int argc, char **argv) {
                     if (timings)
                         printf("EDEN_TIMING connect %llu\n", (unsigned long long)(connected_at - sent[i]));
                     if (join_room(event.peer, i, password) < 0) {
-                        state[i] = 3; failed = 1; enet_peer_reset(event.peer);
+                        state[i] = 3; local_error = 1; enet_peer_reset(event.peer);
                         printf("%s: no se pudo enviar la solicitud\n", names[i]);
                     } else {
                         enet_host_flush(hosts[i]);
@@ -135,7 +146,7 @@ int main(int argc, char **argv) {
                             printf("%02x", (unsigned)event.packet->data[k]);
                         putchar('\n');
                     }
-                    if (id == 2 || id == 24) {
+                    if ((id == 2 || id == 24) && event.packet->dataLength == 5) {
                         if (state[i] != 2) {
                             if (timings)
                                 printf("EDEN_TIMING join %llu\n", (unsigned long long)(now_ms() - connected_at));
@@ -143,7 +154,15 @@ int main(int argc, char **argv) {
                         }
                         state[i] = 2; ever[i] = 1;
                     } else if (reason(id)) {
-                        fprintf(stderr, "%s: %s\n", names[i], reason(id));
+                        if (id == 10 && event.packet->dataLength == 5) {
+                            const enet_uint8 *p = event.packet->data + 1;
+                            uint32_t version = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+                                               (uint32_t)p[2] << 8 | p[3];
+                            fprintf(stderr, "%s: %s (cliente %d, servidor %lu)\n",
+                                    names[i], reason(id), ROOM_PROTOCOL_VERSION, (unsigned long)version);
+                        } else {
+                            fprintf(stderr, "%s: %s\n", names[i], reason(id));
+                        }
                         state[i] = 3; failed = 1; enet_peer_disconnect(event.peer, 0);
                     }
                 } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
@@ -156,7 +175,7 @@ int main(int argc, char **argv) {
         int active = 0;
         for (int i = 0; i < started; ++i) {
             if (state[i] == 1 && now - sent[i] >= 15000) {
-                fprintf(stderr, "%s: sin confirmacion de ingreso en 15 s\n", names[i]);
+                report_join_timeout(names[i], connected_at != 0, 15);
                 state[i] = 3; failed = 1; enet_peer_reset(peers[i]);
             }
             active += state[i] == 1 || state[i] == 2;
@@ -169,7 +188,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < started; ++i) {
         joined += ever[i];
         if (state[i] == 1)
-            fprintf(stderr, "%s: sin confirmacion de ingreso en %d s\n", names[i], duration);
+            report_join_timeout(names[i], connected_at != 0, duration);
         if (peers[i]) enet_peer_disconnect(peers[i], 0);
     }
     for (int i = 0; i < started; ++i)
@@ -187,5 +206,7 @@ int main(int argc, char **argv) {
         if (hosts[i]) enet_host_destroy(hosts[i]);
     enet_deinitialize();
     printf("Finalizado. Ingresaron %d de %d usuarios solicitados. Conexiones cerradas.\n", joined, count);
+    // Exit 1 reports a room outcome; exit 2 reports a local client error.
+    if (local_error) return 2;
     return failed || joined != count ? 1 : 0;
 }
