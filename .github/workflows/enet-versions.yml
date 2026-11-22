@@ -25,11 +25,11 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload tested ENet client
         if: steps.archive-client.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: enet-client
           path: work/enet-actions/collector.tar
@@ -88,10 +88,10 @@ jobs:
     env:
       EDEN_PAGES_URL: https://test-enet-versions-sralcer.eden-rooms.pages.dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: enet-client
       - name: Publish public room versions to Cloudflare Preview
