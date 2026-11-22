@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import ipaddress
+from itertools import cycle
 from datetime import datetime, timezone
 import json
 from html import unescape
@@ -23,7 +24,10 @@ PREVIEW_KEY = 'ENET_PREVIEW_API_KEY'
 SECRET_ENV = (PREVIEW_KEY, 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY')
 VALIDATE_PATH = '/api/versiones-validar'
 SCHEDULED_PATH = '/api/versiones-programadas'
-SCHEDULED_NICKNAME = 'EdenVersions'
+COLLECTOR_NICKNAMES = (
+    'stunning', 'smelly', 'ample', 'hideous', 'crazy', 'strong',
+    'grubby', 'moist', 'scrummy', 'spiffing', 'greasy', 'amazing',
+)
 USER_AGENT = 'EdenRoomsCollector/1.1 (+https://github.com/hectorsequera65-ops/Eden-Rooms)'
 
 
@@ -266,13 +270,13 @@ def collect_public_rooms(base, binary):
         if room.get('id') == room_id:
             rooms[room_id] = room
 
-    def sample_and_publish(room):
+    def sample_and_publish(room, nickname):
         def publish(snapshot):
             result = api(base, SCHEDULED_PATH, snapshot, timeout=6)
             if not isinstance(result, dict) or result.get('ok') is not True:
                 raise ApiError('Scheduled snapshot storage not acknowledged')
         try:
-            collect(binary, room, 5, publish, SCHEDULED_NICKNAME,
+            collect(binary, room, 5, publish, nickname,
                     hard_timeout=7, first_snapshot=True)
             return 'published'
         except RoomUnavailable as error:
@@ -287,7 +291,8 @@ def collect_public_rooms(base, binary):
 
     print(f'Eligible rooms: {len(rooms)}', flush=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(sample_and_publish, rooms.values()))
+        # The submitting thread assigns names in room order, before workers can race.
+        outcomes = list(pool.map(sample_and_publish, rooms.values(), cycle(COLLECTOR_NICKNAMES)))
     published = outcomes.count('published')
     publication_errors = outcomes.count('publication_error')
     client_errors = outcomes.count('client_error')
@@ -311,13 +316,14 @@ def main():
     send_mode.add_argument('--scheduled', action='store_true', help='Sample and publish the public lobby once')
     send_mode.add_argument('--validate-send', action='store_true', help='POST snapshots to validation-only route, without D1 writes')
     parser.add_argument('--room-id', help='Query only this exact registered room ID')
-    parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME', 'sralcer'))
+    parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME'),
+                        help='Use a fixed nickname for manual collection instead of rotating')
     args = parser.parse_args()
     if sum((args.check_api, args.check_auth, args.send, args.validate_send, args.scheduled)) > 1:
         parser.error("Choose only one check or publication mode")
     if args.room_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", args.room_id):
         parser.error("--room-id must be one nonempty registered room ID")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
+    if args.nickname is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.nickname):
         parser.error("Nickname must contain 1-24 letters, digits, underscores or hyphens")
     base = args.base_url.rstrip('/')
     url = urlsplit(base)
@@ -339,6 +345,7 @@ def main():
             print(safe_detail(error), file=sys.stderr)
             return 1
     publisher = SnapshotPublisher(base, validate_only=args.validate_send)
+    nicknames = cycle(COLLECTOR_NICKNAMES)
     while True:
         failed = False
         try:
@@ -374,7 +381,7 @@ def main():
                             publisher(snapshot)
                         else:
                             print(json.dumps(snapshot, ensure_ascii=False), flush=True)
-                    collect(args.client, room, args.duration, emit, args.nickname)
+                    collect(args.client, room, args.duration, emit, args.nickname or next(nicknames))
                 except Exception as error:
                     failed = True
                     print(f"Collection failed for {room['id']}: {type(error).__name__}: {safe_detail(error, 1400)}", file=sys.stderr)

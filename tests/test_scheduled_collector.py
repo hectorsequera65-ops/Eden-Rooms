@@ -2,6 +2,7 @@
 from pathlib import Path
 import io
 import sys
+from threading import Barrier
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +30,8 @@ class ScheduledCollectorTest(unittest.TestCase):
             return {'ok': True}
 
         def collect(binary, target, duration, emit, nickname, **options):
-            self.assertEqual((binary, duration, nickname), ('fixture', 5, 'EdenVersions'))
+            self.assertEqual((binary, duration), ('fixture', 5))
+            self.assertEqual(nickname, 'stunning' if target == first else 'smelly')
             self.assertEqual(options, {'hard_timeout': 7, 'first_snapshot': True})
             if target == first:
                 raise RoomUnavailable('fixture timeout')
@@ -46,6 +48,43 @@ class ScheduledCollectorTest(unittest.TestCase):
             self.assertIn('Unavailable rooms: 1; publication errors: 0; client errors: 0', stdout.getvalue())
             self.assertIn(f"Room unavailable {first['id']}: fixture timeout", stderr.getvalue())
 
+    def test_assigns_full_cycle_in_room_order_with_concurrent_workers(self):
+        rooms = [room('8.8.8.8', port=20668 + index) for index in range(14)]
+        expected = [
+            'stunning', 'smelly', 'ample', 'hideous', 'crazy', 'strong',
+            'grubby', 'moist', 'scrummy', 'spiffing', 'greasy', 'amazing',
+            'stunning', 'smelly',
+        ]
+        expected_by_id = dict(zip((target['id'] for target in rooms), expected))
+        first_pair = Barrier(2)
+
+        def collect(binary, target, duration, emit, nickname, **options):
+            if target in rooms[:2]:
+                first_pair.wait(timeout=5)
+            self.assertEqual(nickname, expected_by_id[target['id']])
+
+        with patch('collector.api', return_value={'storage': 'ENET_PREVIEW_DB', 'salas': rooms}), \
+                patch('collector.collect', side_effect=collect) as enet, \
+                patch('sys.stdout', new_callable=io.StringIO):
+            self.assertEqual(collect_public_rooms('https://example.test', 'fixture'), 0)
+        self.assertCountEqual([call.args[1] for call in enet.call_args_list], rooms)
+
+    def test_manual_rotation_continues_across_room_list_refreshes(self):
+        first, second = room('8.8.8.8'), room('1.1.1.1')
+        first['autorizada'] = second['autorizada'] = True
+        skipped = dict(room('9.9.9.9'), autorizada=False)
+
+        with patch.dict('os.environ', {}, clear=True), \
+                patch('sys.argv', ['collector.py', '--base-url', 'https://example.test']), \
+                patch('collector.api', return_value={'salas': [first, skipped, second]}), \
+                patch('collector.collect') as enet, \
+                patch('collector.time.sleep', side_effect=[None, KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt):
+                main()
+        self.assertEqual([(call.args[1], call.args[4]) for call in enet.call_args_list],
+                         [(first, 'stunning'), (second, 'smelly'),
+                          (first, 'ample'), (second, 'hideous')])
+
     def test_scheduled_client_failure_classification_never_publishes(self):
         target = room('8.8.8.8')
         cases = [
@@ -61,7 +100,7 @@ class ScheduledCollectorTest(unittest.TestCase):
             with self.subTest(status=status, diagnostic=diagnostic):
                 process = MagicMock()
                 process.__enter__.return_value = process
-                process.stdout = f'EdenVersions: {diagnostic}\n'.splitlines(keepends=True) if diagnostic else []
+                process.stdout = f'stunning: {diagnostic}\n'.splitlines(keepends=True) if diagnostic else []
                 process.wait.return_value = process.poll.return_value = status
                 with patch('collector.api', return_value={'storage': 'ENET_PREVIEW_DB', 'salas': [target]}) as http, \
                         patch('collector.subprocess.Popen', return_value=process), \

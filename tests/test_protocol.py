@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend/enet'))
 from protocol import parse_packet3
-from collector import collect
+from collector import COLLECTOR_NICKNAMES, collect
 
 FIXTURE = Path(__file__).parent / 'fixtures/packet3.hex'
 
@@ -73,6 +73,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual([p['nombre'] for p in snapshots[0]['jugadores']],['Ana'])
         with self.assertRaises(ValueError):
             collect('unused',{},1,snapshots.append,'')
+
+    def test_each_rotating_name_excludes_only_the_current_collector(self):
+        for nickname, other_name in zip(COLLECTOR_NICKNAMES, COLLECTOR_NICKNAMES[1:] + COLLECTOR_NICKNAMES[:1]):
+            with self.subTest(nickname=nickname):
+                raw = packet([(nickname, [10,0,0,1], '', ''),
+                              (other_name, [10,0,0,2], 'Game', '1.0')])
+                process = MagicMock()
+                process.__enter__.return_value = process
+                process.stdout = [f'{nickname}: CONECTADO a la sala\n',
+                                  f'EDEN_PACKET3 {len(raw)} {raw.hex()}\n']
+                process.wait.return_value = process.poll.return_value = 0
+                snapshots = []
+                room = {'id': 'room', 'direccion': '127.0.0.1', 'puerto': 6007}
+                with patch('collector.subprocess.Popen', return_value=process) as launch:
+                    collect('unused', room, 1, snapshots.append, nickname, first_snapshot=True)
+                self.assertEqual(launch.call_args.kwargs['env']['EDEN_ENET_NICKNAME'], nickname)
+                self.assertEqual([p['nombre'] for p in snapshots[0]['jugadores']], [other_name])
 
     def test_truncated_metadata_length_rejected(self):
         raw=packet([('Ana',[10,0,0,1],'Game','1.0')])
