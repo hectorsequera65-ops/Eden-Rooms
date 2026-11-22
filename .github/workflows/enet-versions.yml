@@ -1,4 +1,5 @@
 name: ENet versions
+run-name: ${{ inputs.cloudflare_slot && format('ENet Cloudflare slot {0}', inputs.cloudflare_slot) || '' }}
 
 on:
   pull_request:
@@ -9,6 +10,10 @@ on:
         description: Publish to Cloudflare Preview after local tests
         type: boolean
         default: false
+      cloudflare_slot:
+        description: UTC slot in epoch milliseconds (set by the Cloudflare Worker)
+        type: string
+        default: ''
   schedule:
     - cron: '*/5 * * * *'
 
@@ -17,7 +22,11 @@ permissions:
 
 jobs:
   versions:
-    if: github.event_name != 'schedule' || vars.EDEN_ENET_PREVIEW_PUBLISH == 'true'
+    if: >-
+      (github.event_name != 'schedule' ||
+        (vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare')) &&
+      (inputs.cloudflare_slot == '' || (github.run_attempt == 1 &&
+        (!inputs.publish || (github.ref == 'refs/heads/main' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
@@ -59,7 +68,9 @@ jobs:
         if: >-
           github.ref == 'refs/heads/main' &&
           vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish == true))
+          ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
+            (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
+              (inputs.cloudflare_slot == '' || vars.EDEN_ENET_CRON_SOURCE == 'cloudflare')))
         run: |
           cd work/enet-actions
           tar -chf collector.tar eden-collector "deps/usr/lib/$(cc -print-multiarch)"/libenet.so.7
@@ -78,7 +89,9 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish == true))
+      ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
+          (inputs.cloudflare_slot == '' || (github.run_attempt == 1 && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
     environment: enet-preview
     concurrency:
       group: enet-versions-preview
