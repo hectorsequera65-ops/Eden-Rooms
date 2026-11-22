@@ -3,7 +3,7 @@ import { authorizeVersionRequest, handleVersionSnapshot } from '../../lib/versio
 
 // Authentication only: no D1 queries, writes, ENet connection or snapshot required.
 export async function onRequestGet({request,env}) {
-  const denied=authorizeVersionRequest(request,env);
+  const denied=authorizeVersionRequest(request,env,{allowPreview:true});
   if(denied)return denied;
   return Response.json({
     ok:true,endpoint:'versiones-validar',contrato:1,modo:'autenticacion',

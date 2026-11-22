@@ -18,6 +18,10 @@ from urllib.parse import urlsplit
 from protocol import parse_packet3
 
 
+PREVIEW_URL = 'https://test-enet-versions-sralcer.eden-rooms.pages.dev'
+PREVIEW_KEY = 'ENET_PREVIEW_API_KEY'
+SECRET_ENV = (PREVIEW_KEY, 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY')
+VALIDATE_PATH = '/api/versiones-validar'
 SCHEDULED_PATH = '/api/versiones-programadas'
 SCHEDULED_NICKNAME = 'EdenVersions'
 USER_AGENT = 'EdenRoomsCollector/1.1 (+https://github.com/hectorsequera65-ops/Eden-Rooms)'
@@ -35,7 +39,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def safe_detail(value, limit=800):
     text = str(value)
-    for key in ('VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY'):
+    for key in SECRET_ENV:
         secret = os.environ.get(key)
         if secret:
             text = text.replace(secret, '[REDACTED]')
@@ -53,7 +57,13 @@ def api(base, path, payload=None, timeout=15):
         key = os.environ.get('AUTORIZACIONES_API_KEY')
         if key:
             headers['X-Collector-Key'] = key
-    if body is None and path in ('/api/versiones-validar', SCHEDULED_PATH):
+    preview_auth = PREVIEW_KEY in os.environ and (path == SCHEDULED_PATH or
+                                                 (path == VALIDATE_PATH and body is None))
+    if preview_auth:
+        if base != PREVIEW_URL or not os.environ[PREVIEW_KEY]:
+            raise ApiError(f'{PREVIEW_KEY} requires the canonical Preview URL and a configured key')
+        headers['X-ENet-Preview-Key'] = os.environ[PREVIEW_KEY]
+    elif body is None and path in (VALIDATE_PATH, SCHEDULED_PATH):
         key = os.environ.get('VERSIONES_API_KEY')
         if key:
             headers['X-API-Key'] = key
@@ -62,8 +72,9 @@ def api(base, path, payload=None, timeout=15):
         if body is not None:
             headers['Content-Type'] = 'application/json'
     elif body is not None:
-        headers.update({'Content-Type': 'application/json',
-                        'X-API-Key': os.environ['VERSIONES_API_KEY']})
+        headers['Content-Type'] = 'application/json'
+        if not preview_auth:
+            headers['X-API-Key'] = os.environ['VERSIONES_API_KEY']
     req = urllib.request.Request(base + path, data=body, headers=headers)
     opener = urllib.request.build_opener(NoRedirect())
     try:
@@ -110,7 +121,7 @@ class SnapshotPublisher:
         previous = self.sent.get(snapshot['sala_id'])
         if previous and previous[0] == signature and self.now() - previous[1] < 60:
             return False
-        path = '/api/versiones-validar' if self.validate_only else '/api/versiones-multiples'
+        path = VALIDATE_PATH if self.validate_only else '/api/versiones-multiples'
         result = self.transport(self.base, path, snapshot)
         if self.validate_only:
             if not isinstance(result, dict) or result.get('validado') is not True or result.get('escritura') is not False:
@@ -131,7 +142,7 @@ def collect(binary, room, duration, emit, nickname="sralcer", hard_timeout=None,
     command = [binary, room['direccion'], str(room['puerto']), '1', str(duration)]
     snapshots_received = 0
     child_env = {key: value for key, value in os.environ.items()
-                 if key not in ('COLLECTOR_API_KEY', 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY')}
+                 if key not in SECRET_ENV}
     child_env['EDEN_ENET_NICKNAME'] = nickname
     if timings is not None:
         child_env['EDEN_ENET_TIMINGS'] = '1'
@@ -285,8 +296,9 @@ def main():
         parser.error('Invalid duration/interval')
     if args.scheduled and args.room_id is not None:
         parser.error('--scheduled always processes the public lobby')
-    if (args.send or args.validate_send or args.check_auth or args.scheduled) and not os.environ.get('VERSIONES_API_KEY'):
-        parser.error('VERSIONES_API_KEY is required for publishing or checking versions')
+    key_name = PREVIEW_KEY if PREVIEW_KEY in os.environ and (args.check_auth or args.scheduled) else 'VERSIONES_API_KEY'
+    if (args.send or args.validate_send or args.check_auth or args.scheduled) and not os.environ.get(key_name):
+        parser.error(f'{key_name} is required for publishing or checking versions')
     if args.scheduled:
         try:
             return collect_public_rooms(base, args.client)
@@ -298,12 +310,16 @@ def main():
         failed = False
         try:
             if args.check_auth:
-                result = api(base, '/api/versiones-validar')
+                result = api(base, VALIDATE_PATH)
                 if (not isinstance(result, dict) or result.get('endpoint') != 'versiones-validar'
                     or result.get('contrato') != 1 or result.get('modo') != 'autenticacion'
                     or result.get('autenticado') is not True or result.get('escritura') is not False):
                     raise ApiError('Authentication endpoint did not confirm the no-write contract; refusing fallback')
-                print(json.dumps(result), flush=True)
+                print(json.dumps({
+                    'ok': True, 'endpoint': 'versiones-validar', 'contrato': 1,
+                    'modo': 'autenticacion', 'autenticado': True, 'escritura': False,
+                    'db_configurada': result.get('db_configurada') is True,
+                }), flush=True)
                 return 0
             data = api(base, '/api/autorizaciones')
             if not isinstance(data, dict) or not isinstance(data.get('salas'), list):

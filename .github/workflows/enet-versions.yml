@@ -6,12 +6,10 @@ on:
       mode:
         description: Execution mode
         type: choice
-        default: collect
+        default: check-auth
         options:
           - collect
           - check-auth
-  schedule:
-    - cron: '*/5 * * * *'
 
 permissions:
   contents: read
@@ -22,22 +20,23 @@ concurrency:
 
 jobs:
   check-auth:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check-auth'
+    if: github.ref == 'refs/heads/test/enet-versions-sralcer' && inputs.mode == 'check-auth'
+    environment: enet-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: test/enet-versions-sralcer
           persist-credentials: false
 
       - name: Check versions API authentication
         env:
-          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+          ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: python3 backend/enet/collector.py --base-url https://test-enet-versions-sralcer.eden-rooms.pages.dev --check-auth
 
   versions:
-    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'check-auth'
+    if: github.ref == 'refs/heads/test/enet-versions-sralcer' && inputs.mode == 'collect'
+    environment: enet-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
@@ -79,7 +78,7 @@ jobs:
       - name: Publish public room versions to Cloudflare Preview
         if: vars.EDEN_ENET_PUBLISH == 'true'
         env:
-          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+          ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: |
           timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
             --client ./work/enet-actions/eden-collector --scheduled
