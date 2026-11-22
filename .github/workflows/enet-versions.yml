@@ -25,7 +25,7 @@ jobs:
     if: >-
       (github.event_name != 'schedule' ||
         (vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare')) &&
-      (inputs.cloudflare_slot == '' || (github.run_attempt == 1 &&
+      (github.event_name != 'workflow_dispatch' || inputs.cloudflare_slot == '' || (github.run_attempt == 1 &&
         (!inputs.publish || (github.ref == 'refs/heads/main' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
     runs-on: ubuntu-24.04
     timeout-minutes: 5

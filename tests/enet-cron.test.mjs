@@ -24,7 +24,13 @@ test('cron reserves each slot once and sends only the expected GitHub inputs', a
 
   await tick(current);
   await tick(current + interval + 1);
+  await tick(current + 2 * interval);
   assert.equal(outbound.mock.callCount(), 0);
+  for (const [path, method] of [['invalid', 'POST'], [current + interval, 'GET']]) {
+    const response = object.fetch(new Request(`https://dispatch-slots.internal/${path}`, { method }));
+    assert.equal(response.status, 400);
+  }
+  assert.equal(values.size, 0);
   await Promise.all([tick(current + interval), tick(current + interval)]);
   object = new DispatchSlots({ storage });
   await tick(current + interval);

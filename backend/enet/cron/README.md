@@ -19,7 +19,8 @@ SQLite propio de un Durable Object para reservar el turno.
 - **Durable Objects Free** estima 288 solicitudes internas al día y, para turnos
   nuevos, una lectura y una escritura por turno sobre una sola clave. La cuota
   diaria es de 100.000 solicitudes, 13.000 GB-s, 5 millones de filas leídas y
-  100.000 escritas. Las cuotas son compartidas en la cuenta.
+  100.000 escritas. El límite total de almacenamiento SQLite del plan Free es
+  de 5 GB. Las cuotas son compartidas en la cuenta.
   [Precios de Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 - **GitHub Actions** cuesta USD 0 en el repositorio público con runners estándar.
   Si pasara a privado, 8.640 turnos en 30 días superarían los 2.000 minutos de
@@ -42,7 +43,7 @@ el job de publicación. [Permisos del dispatch](https://docs.github.com/en/rest/
 
 El Durable Object serializa los intentos y confirma la reserva en SQLite antes
 del POST. Cada turno válido se intenta como máximo una vez en este Worker.
-Se descartan turnos viejos o repetidos. Ante un HTTP fallido o un timeout, el
+Se descartan turnos vencidos, futuros o repetidos. Ante un HTTP fallido o un timeout, el
 turno se pierde si GitHub no llegó a aceptarlo. El siguiente turno sigue su
 curso. Un HTTP 200 o 204 solo confirma el despacho. GitHub puede demorar la
 ejecución y la concurrencia de publicación puede reemplazar un job pendiente

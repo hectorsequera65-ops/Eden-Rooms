@@ -1,6 +1,10 @@
 const INTERVAL_MS = 5 * 60 * 1000;
 const DISPATCH_URL = 'https://api.github.com/repos/hectorsequera65-ops/Eden-Rooms/actions/workflows/enet-versions.yml/dispatches';
 
+function isSlot(slot) {
+  return Number.isSafeInteger(slot) && slot > 0 && slot % INTERVAL_MS === 0;
+}
+
 export class DispatchSlots {
   constructor(ctx) {
     this.slots = ctx.storage.kv;
@@ -8,6 +12,9 @@ export class DispatchSlots {
 
   fetch(request) {
     const slot = Number(new URL(request.url).pathname.slice(1));
+    if (request.method !== 'POST' || !isSlot(slot)) {
+      return new Response(null, { status: 400 });
+    }
     // Synchronous SQLite operations prevent interleaving. The output gate
     // holds the response until the reservation is durably committed.
     if (slot <= (this.slots.get('latest') ?? -1)) {
@@ -21,8 +28,8 @@ export class DispatchSlots {
 export default {
   async scheduled(event, env) {
     const slot = event.scheduledTime;
-    if (!Number.isSafeInteger(slot) || slot % INTERVAL_MS !== 0 ||
-        Date.now() - slot >= INTERVAL_MS) {
+    const age = Date.now() - slot;
+    if (!isSlot(slot) || age < 0 || age >= INTERVAL_MS) {
       console.warn('ENet cron skipped an invalid or expired slot', slot);
       return;
     }
