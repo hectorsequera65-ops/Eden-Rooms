@@ -1,6 +1,5 @@
 export const VERSION_TTL_MS = 120000;
 export const SCHEDULED_VERSION_TTL_MS = 360000;
-export const VERSION_POLL_MS = 2000;
 const VERSION_FIELDS = ['gameVersion','game_version','gameVer','game_ver','applicationVersion','application_version'];
 const roomIdValid = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(id);
 export function snapshotFresh(timestamp, now = Date.now(), ttl = VERSION_TTL_MS) {
@@ -133,10 +132,10 @@ function associationResult(room, entry) {
   const players = manualPlayers(room,entry), matched = players.filter(p => p.gameVersionSource === 'enet-card').length;
   const fallback = players.some(p => p.gameVersionMatch === 'name-title');
   let result, detail;
-  if (!observations.length) {result='empty';detail='ENet completó la consulta sin jugadores.';}
-  else if (!versioned) {result='no_versions';detail='ENet devolvió jugadores, pero ninguno anunció una versión.';}
-  else if (!matched) {result='association_error';detail='ENet devolvió '+versioned+' versiones, pero no se pudieron asociar con seguridad a los jugadores actuales. Se requiere nombre/IP virtual o apodo único, juego y Title ID exactos; no se reutilizan identidades que cambiaron.';}
-  else {result=matched<versioned?'partial':'matched';detail='ENet devolvió '+versioned+' versiones; '+matched+' asociadas a jugadores actuales.';}
+  if (!observations.length) {result='empty';detail='La muestra publicada quedó vacía.';}
+  else if (!versioned) {result='no_versions';detail='La muestra publicada contiene jugadores sin versión.';}
+  else if (!matched) {result='association_error';detail='La muestra contiene '+versioned+' versiones, pero no se pudieron asociar con seguridad a los jugadores actuales. Se requiere nombre/IP virtual o apodo único, juego y Title ID exactos; no se reutilizan identidades que cambiaron.';}
+  else {result=matched<versioned?'partial':'matched';detail='La muestra contiene '+versioned+' versiones; '+matched+' asociadas a jugadores actuales.';}
   if (fallback) detail+=' Coincidencia por apodo único, juego y Title ID; el directorio no informa IP virtual.';
   return {result,detail,received:observations.length,versioned,matched};
 }
@@ -153,75 +152,42 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     return [...entries.values()].find(entry => entry.open && entry.address === roomOrId.address
       && entry.port === Number(roomOrId.port));
   }
-  function update(entry, patch) {
-    const changed = Object.keys(patch).some(key => ['snapshot','phase','deadline'].includes(key) && entry[key] !== patch[key]);
-    Object.assign(entry, patch);
-    if (changed && entry.open && entries.get(entry.id) === entry) onChange();
+  function cancel(entry) {
+    entry.controller?.abort();
+    entry.controller = null;
+    entry.pending = null;
+    if (entry.phase === 'loading') entry.phase = 'error';
   }
-  function failed(entry, reason = 'request') {
-    update(entry, {errorReason:reason, phase:'error', jobActive:false, deadline:null, nextFetch:Infinity});
-  }
-  async function fetchRoom(id) {
-    const entry = entries.get(id);
-    if (!entry?.open) return;
-    if (entry.pending) return entry.pending;
-    if (entry.started && !entry.jobActive) return; // An opening can enqueue only once.
-    const finalPoll = entry.jobActive && entry.deadline !== null && now() >= entry.deadline;
-    if (!finalPoll && now() < entry.nextFetch) return;
-    const enqueue = !entry.started;
-    entry.started = true; // Latch before yielding, including lost/aborted POST responses.
-    const controller = new AbortController(); entry.controller = controller; entry.paused = false;
-    if (!entry.jobActive) update(entry, {phase:'loading'});
-    entry.pending = (async () => {
-      let timedOut = false;
-      const timeout = setTimeout(() => {timedOut = true; controller.abort();}, timeoutMs);
-      const options = {cache:'no-store', signal:controller.signal};
-      async function readSnapshot() {
-        const response = await fetcher('/api/versiones-sala?id=' + encodeURIComponent(id), options);
-        if (!response.ok) throw Error('Versions API unavailable');
-        const data = await response.json();
-        const snapshot = data?.sala_id === id && data.disponible === true && Array.isArray(data.jugadores)
-          && snapshotFresh(data.consultado_en, now())
-          && (!data.endpoint || data.endpoint.direccion === entry.address && Number(data.endpoint.puerto) === entry.port) ? data : null;
-        if (!entry.open || entries.get(id) !== entry) return false;
-        if (snapshot) {
-          update(entry, {snapshot, phase:'ready', jobActive:false, deadline:null, nextFetch:Infinity});
-          return true;
+  async function readPublished(entry, controller) {
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetcher('/api/versiones-publicadas?id=' + encodeURIComponent(entry.id),
+        {method:'GET', cache:'no-store', credentials:'omit', signal:controller.signal});
+      if (!response.ok) throw Error('Versions API unavailable');
+      const data = await response.json();
+      if (entry.controller !== controller) return;
+      if (controller.signal.aborted || data?.sala_id !== entry.id) throw Error('Invalid snapshot');
+      if (data.disponible === false) {
+        entry.phase = 'unavailable';
+      } else {
+        if (data.disponible !== true || !Array.isArray(data.jugadores)
+          || !snapshotFresh(data.consultado_en, now(), Infinity)
+          || data.endpoint?.direccion !== entry.address || Number(data.endpoint?.puerto) !== entry.port) {
+          throw Error('Invalid snapshot');
         }
-        return false;
+        entry.snapshot = data;
+        entry.phase = 'ready';
       }
-      async function queueState(response) {
-        const data = await response.json();
-        if (!entry.open || entries.get(id) !== entry) return;
-        if ((!response.ok && response.status !== 429 && !(response.status === 403 && data?.motivo === 'endpoint')) || data?.sala_id && data.sala_id !== id) throw Error('Queue unavailable');
-        if (data.estado === 'listo') {
-          entry.jobActive = true;
-          if (!await readSnapshot()) failed(entry,'snapshot');
-        } else if (data.estado === 'pendiente' || data.estado === 'consultando') {
-          if (finalPoll) { failed(entry,'timeout'); return; }
-          const wait = Math.min(45000, Number(data.espera_ms));
-          if (!Number.isFinite(wait) || wait <= 0) { failed(entry); return; }
-          const deadline = Math.min(entry.deadline ?? Infinity, now() + wait);
-          update(entry, {phase:'loading', jobActive:true, deadline, nextFetch:now() + VERSION_POLL_MS});
-        } else if (data.estado === 'error' || response.status === 429) {
-          const knownReason = ['collector','timeout','snapshot','endpoint'].includes(data.motivo);
-          failed(entry, response.status === 429 ? 'rate_limit' : knownReason ? data.motivo : 'job');
-        }
-        else throw Error('Invalid job status');
+    } catch {
+      if (entry.controller === controller) entry.phase = 'error';
+    } finally {
+      clearTimeout(timeout);
+      if (entry.controller === controller) {
+        entry.controller = null;
+        entry.pending = null;
+        onChange();
       }
-      try {
-        if (enqueue) {
-          await queueState(await fetcher('/api/versiones-consultar', {...options, method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sala_id:id})}));
-        } else if (entry.jobActive) {
-          await queueState(await fetcher('/api/versiones-consultar?id=' + encodeURIComponent(id), options));
-        }
-      } catch {
-        if (finalPoll) failed(entry,'timeout');
-        else if (entry.jobActive && now() < entry.deadline) entry.nextFetch = now() + VERSION_POLL_MS;
-        else if (!entry.paused || timedOut) failed(entry);
-      } finally { clearTimeout(timeout); entry.pending = null; entry.controller = null; }
-    })();
-    return entry.pending;
+    }
   }
   return {
     open(room) {
@@ -229,8 +195,9 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
       if (room?.hasPassword || !roomIdValid(id)) return;
       let entry = entryFor(room);
       if (!entry || entry.address !== room.address || entry.port !== Number(room.port)) {
-        entry = {id, address:room.address, port:Number(room.port), started:true, snapshot:null,
-          nextFetch:Infinity, pending:null, phase:'idle', jobActive:false, deadline:null, eligible:new Set()};
+        if (entry) cancel(entry);
+        entry = {id, address:room.address, port:Number(room.port), snapshot:null,
+          pending:null, phase:'idle', eligible:new Set()};
         entries.set(id, entry);
       }
       entry.open = true;
@@ -238,25 +205,24 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
     query(room) {
       if (room?.hasPassword || !roomIdValid(room?.versionsRoomId)) return Promise.resolve();
       this.open(room);
-      const previous = entryFor(room);
-      if (!previous?.open) return Promise.resolve();
-      if (previous.pending || previous.jobActive && now() < previous.deadline) return previous.pending || Promise.resolve();
-      // Only a manual click can reset the POST latch; concurrent clicks share it.
-      previous.controller?.abort();
-      entries.set(previous.id, {...previous, started:false, pending:null, controller:null,
-        phase:'idle', snapshot:null, jobActive:false, deadline:null, nextFetch:0, eligible:identities(room.players)});
-      return fetchRoom(previous.id);
+      const entry = entryFor(room);
+      if (entry.pending) return entry.pending;
+      entry.controller = new AbortController();
+      entry.phase = 'loading';
+      entry.snapshot = null;
+      entry.eligible = identities(room.players);
+      const controller = entry.controller;
+      entry.pending = Promise.resolve().then(() => {
+        if (!controller.signal.aborted) return readPublished(entry, controller);
+      });
+      onChange();
+      return entry.pending;
     },
     close(id) {
       for (const [key, entry] of entries) if (id === undefined || key === id) {
-        entry.open = false; entry.paused = true; entry.controller?.abort();
-        if (entry.jobActive || entry.pending) failed(entry);
-        entry.pending = null;
+        entry.open = false;
+        cancel(entry);
       }
-    },
-    async refresh(rooms) {
-      const ids = [...new Set(rooms.map(r => entryFor(r)).filter(entry => entry?.open).map(entry => entry.id))];
-      await Promise.all(ids.map(fetchRoom));
     },
     decorate(room) {
       const entry = entryFor(room);
@@ -270,23 +236,11 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
         return {text:'Versiones consultadas a las ' + queryTime(entry.snapshot.consultado_en),
           consultedAt:entry.snapshot.consultado_en, ...result, retry:false};
       }
-      if (entry.phase === 'error' || entry.jobActive && entry.deadline !== null && now() >= entry.deadline) {
-        const reason = entry.phase !== 'error' ? 'timeout' : entry.errorReason;
-        const detail = {collector:'El recolector ENet informó un error.', timeout:'No llegó el resultado ENet dentro del tiempo de espera.',
-          endpoint:'La sala ya no está disponible para la consulta ENet.',
-          snapshot:'El trabajo terminó, pero la API no entregó una muestra vigente y válida.',
-          rate_limit:'Se alcanzó un límite de solicitudes; esperá antes de reintentar.',job:'El trabajo ENet no pudo completarse.'}[reason]
-          || 'No se pudo leer la respuesta de Cloudflare.';
-        return {text:'No se pudieron consultar las versiones. '+detail+' Pulsá Consultar versiones para reintentar.', result:'error', reason, retry:false};
+      if (entry.phase === 'unavailable') return {text:'Versión no disponible', result:'unavailable'};
+      if (entry.phase === 'error') {
+        return {text:'No se pudieron consultar las versiones. Pulsá Consultar versiones para reintentar.', result:'error'};
       }
-      return {text:'Consultando versiones…', retry:false};
-    },
-    nextExpiry() {
-      const times = [];
-      for (const entry of entries.values()) {
-        if (entry.open && entry.jobActive && entry.deadline > now()) times.push(entry.deadline);
-      }
-      return times.length ? Math.min(...times) : null;
+      return {text:'Consultando versiones…'};
     },
     retain(rooms) {
       for (const [id, entry] of entries) {
@@ -297,14 +251,11 @@ export function createVersionsClient({fetcher = (...args) => fetch(...args), now
           const present = identities(current.players);
           entry.eligible = new Set([...entry.eligible].filter(key => present.has(key)));
         }
-        if (!sameRoom) { entry.open = false; entry.paused = true; entry.controller?.abort(); entries.delete(id); }
+        if (!sameRoom) { entry.open = false; cancel(entry); entries.delete(id); }
       }
     },
     abort() {
-      for (const entry of entries.values()) if (entry.controller) {
-        entry.paused = true; entry.nextFetch = 0; entry.controller.abort();
-        if (!entry.jobActive) failed(entry); // An uncertain POST must not be sent twice in this opening.
-      }
+      for (const entry of entries.values()) if (entry.controller) cancel(entry);
     }
   };
 }

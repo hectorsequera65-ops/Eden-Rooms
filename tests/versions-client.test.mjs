@@ -7,7 +7,7 @@ const now=Date.now();
 const player={nickname:'Eden',gameName:'Mario Kart 8 Deluxe'};
 const observation={nombre:'Eden',juego:'Mario Kart 8 Deluxe',title_id:'0100152000022000',version:'4.0.1',virtual_ip:'10.166.1.1'};
 const room={address:'room.test',port:20668,versionsRoomId:'sala-prueba-20668',players:[player]};
-const snapshot={disponible:true,sala_id:room.versionsRoomId,consultado_en:new Date(now).toISOString(),jugadores:[observation]};
+const snapshot={disponible:true,sala_id:room.versionsRoomId,consultado_en:new Date(now).toISOString(),endpoint:{direccion:room.address,puerto:room.port},jugadores:[observation]};
 test('maps exact registered room and displays version using existing player-row classes',()=>{
   const enriched=applyRoomSnapshot(room,snapshot,now);
   const html=playerListMarkup(enriched.players);
@@ -53,34 +53,39 @@ test('upstream numeric 64-bit IDs remain exact before matching',()=>{
 });
 
 
-test('opening, refreshing, closing and reopening never enqueue; manual click does',async()=>{
+test('one GET per click, with no reads on reopening or roster updates',async()=>{
   let calls=0,clock=now;
   const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
   const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    calls++;return Response.json(options.method==='POST'?{estado:'listo'}:{...snapshot,consultado_en:new Date(clock).toISOString()});
+    calls++;
+    assert.equal(url, '/api/versiones-publicadas?id=' + room.versionsRoomId);
+    assert.equal(options.method, 'GET');
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.headers, undefined);
+    return Response.json(snapshot);
   }});
-  client.open(current);await client.refresh([current]);assert.equal(calls,0);
-  await Promise.all([client.query(current),client.query(current)]);assert.equal(calls,2);
+  client.open(current);assert.equal(calls,0);
+  await Promise.all([client.query(current),client.query(current)]);assert.equal(calls,1);
   assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
-  clock+=8*3600000;client.retain([current]);await client.refresh([current]);
+  clock+=8*3600000;client.retain([current]);
   assert.ok(playerListMarkup(client.decorate(current).players).includes('Versión 4.0.1'));
   assert.equal(client.status(current).consultedAt,snapshot.consultado_en);
-  client.close();client.open(current);await client.refresh([current]);assert.equal(calls,2);
+  client.close();client.open(current);assert.equal(calls,1);
   assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
-  await client.query(current);assert.equal(calls,4);
-  assert.equal(client.status(current).consultedAt,new Date(clock).toISOString());
+  await client.query(current);assert.equal(calls,2);
+  assert.equal(client.status(current).consultedAt,snapshot.consultado_en);
 });
 test('directory roster remains live without manual queries',async()=>{
   let calls=0;const client=createVersionsClient({fetcher:async()=>{calls++;throw Error();}});
   client.open(room);
   const next={...room,players:[{nickname:'New',gameName:'Game'}]};
-  client.retain([next]);await client.refresh([next]);
+  client.retain([next]);
   assert.deepEqual(client.decorate(next).players,next.players);assert.equal(calls,0);
   assert.match(playerListMarkup(next.players),/Versión sin consultar/);
 });
 test('versions require unique name/IP, current game/title and uninterrupted presence',async()=>{
   const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
-  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:snapshot)});
+  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(snapshot)});
   await client.query(current);
   for(const changed of [{...player}, {...player,virtual_ip:'10.166.1.2'},
     {...current.players[0],gameName:'Other'}, {...current.players[0],gameId:'1'}]){
@@ -96,34 +101,24 @@ test('versions require unique name/IP, current game/title and uninterrupted pres
   assert.equal(client.decorate({...current,versionsRoomId:'other'}).players[0].gameVersion,undefined);
   await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
 });
-test('pending status GETs never enqueue, duplicate clicks share work, timeout allows manual retry',async()=>{
-  let clock=now,posts=0,gets=0;
-  const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    if(options.method==='POST')posts++;else gets++;
-    return Response.json({estado:'pendiente',espera_ms:45000});
-  }});
-  await client.query(room);await client.query(room);assert.equal(posts,1);
-  clock+=2000;await client.refresh([room]);assert.equal(gets,1);
-  clock+=45000;await client.refresh([room]);assert.match(client.status(room).text,/Pulsá Consultar/);
-  clock+=600000;await client.refresh([room]);assert.equal(posts,1);
-  await client.query(room);assert.equal(posts,2);
-});
-test('late closed query cannot overwrite a manually retried result',async()=>{
-  const deferred=[];let snapshotReads=0;
-  const client=createVersionsClient({now:()=>now,fetcher:(url,options)=>{
-    if(options.method==='POST')return new Promise(resolve=>deferred.push(resolve));
-    snapshotReads++;return Promise.resolve(Response.json(snapshot));
-  }});
-  const first=client.query(room);client.close();client.open(room);
+test('late closed read cannot overwrite a manually retried result',async()=>{
+  const deferred=[];
+  const client=createVersionsClient({now:()=>now,fetcher:()=>new Promise(resolve=>deferred.push(resolve))});
+  const first=client.query(room);
+  await Promise.resolve();
+  client.close();
   const second=client.query(room);
-  deferred[1](Response.json({estado:'pendiente',espera_ms:45000}));await second;
-  deferred[0](Response.json({estado:'listo'}));await first;
-  assert.equal(snapshotReads,0);assert.equal(client.status(room).text,'Consultando versiones…');
+  await Promise.resolve();
+  deferred[1](Response.json(snapshot));
+  await second;
+  deferred[0](Response.json({disponible:false,sala_id:room.versionsRoomId}));
+  await first;
+  assert.equal(client.status(room).consultedAt,snapshot.consultado_en);
 });
-test('expired, cross-room and wrong endpoint responses cannot be accepted',async()=>{
-  for(const invalid of [{...snapshot,consultado_en:new Date(now-120000).toISOString()},
+test('future, cross-room and wrong endpoint responses cannot be accepted',async()=>{
+  for(const invalid of [{...snapshot,consultado_en:new Date(now+31000).toISOString()},
     {...snapshot,sala_id:'other'},{...snapshot,endpoint:{direccion:'other.test',puerto:20668}}]){
-    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:invalid)});
+    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(invalid)});
     await client.query(room);assert.match(client.status(room).text,/No se pudieron/);
     assert.equal(client.decorate(room).players[0].gameVersion,undefined);
   }
@@ -134,18 +129,18 @@ test('unregistered rooms cannot query, including temporary missing registration 
   await client.query(room);await client.query({...room,versionsRoomId:undefined});assert.equal(calls,1);
 });
 
-test('lost POST acknowledgement never retries automatically, including card reopen',async()=>{
-  let posts=0;
+test('aborted read does not restart on reopening',async()=>{
+  let reads=0;
   const client=createVersionsClient({fetcher:(url,options)=>{
-    posts++;return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('paused','AbortError'))));
+    reads++;return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('paused','AbortError'))));
   }});
-  const pending=client.query(room);client.abort();await pending;
-  client.close();client.open(room);await client.refresh([room]);assert.equal(posts,1);
+  const pending=client.query(room);await Promise.resolve();client.abort();await pending;
+  client.close();client.open(room);assert.equal(reads,1);
 });
 test('missing or ambiguous snapshot IP cannot be assigned even to a unique lobby name',async()=>{
   const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
   for(const jugadores of [[{...observation,virtual_ip:undefined}], [observation,{...observation,virtual_ip:'invalid'}]]){
-    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:{...snapshot,jugadores})});
+    const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json({...snapshot,jugadores})});
     await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,undefined);
   }
 });
@@ -154,22 +149,22 @@ test('missing or ambiguous snapshot IP cannot be assigned even to a unique lobby
 const directoryRoom=parseLobbyJSON(readFileSync(new URL('./fixtures/lobby-smash-no-ip.json',import.meta.url),'utf8')).rooms[0];
 const smashObservations=directoryRoom.players.map((p,i)=>({nombre:p.nickname,juego:p.gameName,title_id:'01006A800016E000',virtual_ip:'10.166.1.'+(i+1),version:i?'13.0.5':'13.0.2'}));
 function fixtureClient(jugadores=smashObservations){
-  let clock=now,posts=0;
+  let clock=now,reads=0;
   const client=createVersionsClient({now:()=>clock,fetcher:async(url,options)=>{
-    if(options.method==='POST'){posts++;return Response.json({estado:'listo'});}
-    return Response.json({disponible:true,sala_id:directoryRoom.versionsRoomId,consultado_en:new Date(clock).toISOString(),jugadores});
+    reads++;
+    return Response.json({disponible:true,sala_id:directoryRoom.versionsRoomId,consultado_en:new Date(now).toISOString(),endpoint:{direccion:directoryRoom.address,puerto:directoryRoom.port},jugadores});
   }});
-  return {client,advance:()=>clock+=8*3600000,posts:()=>posts};
+  return {client,advance:()=>clock+=8*3600000,reads:()=>reads};
 }
 test('real directory schema without IP matches unique nickname/game/exact Title ID and keeps live roster',async()=>{
-  const {client,advance,posts}=fixtureClient();
+  const {client,advance,reads}=fixtureClient();
   assert.equal(directoryRoom.players[0].gameId,'72174692027785216');
-  client.open(directoryRoom);await client.refresh([directoryRoom]);assert.equal(posts(),0);
+  client.open(directoryRoom);assert.equal(reads(),0);
   await client.query(directoryRoom);
   assert.deepEqual(client.decorate(directoryRoom).players.map(p=>p.gameVersion),['13.0.2','13.0.5']);
   assert.equal(client.status(directoryRoom).result,'matched');assert.match(client.status(directoryRoom).detail,/apodo único/);
-  advance();client.retain([directoryRoom]);await client.refresh([directoryRoom]);
-  assert.equal(client.decorate(directoryRoom).players[0].gameVersion,'13.0.2');assert.equal(posts(),1);
+  advance();client.retain([directoryRoom]);
+  assert.equal(client.decorate(directoryRoom).players[0].gameVersion,'13.0.2');assert.equal(reads(),1);
   const next={...directoryRoom,players:[directoryRoom.players[1],{...directoryRoom.players[0],nickname:'NewPlayer'}]};
   client.retain([next]);
   assert.deepEqual(client.decorate(next).players.map(p=>p.gameVersion),['13.0.5',undefined]);
@@ -189,29 +184,25 @@ test('no-IP fallback rejects homonyms on either side, missing/unsafe IDs, wrong 
   const {client}=fixtureClient([smashObservations[0],{...smashObservations[0],juego:'Other',virtual_ip:'10.166.1.9'}]);
   await client.query(directoryRoom);assert.ok(client.decorate(directoryRoom).players.every(p=>!p.gameVersion));
 });
-test('completed empty, no-version and association failures have separate diagnostic states',async()=>{
-  for(const [observed,result,detail] of [[[],'empty',/sin jugadores/],
-    [[{...smashObservations[0],version:''}],'no_versions',/ninguno anunció/],
-    [[{...smashObservations[0],nombre:'Unknown'}],'association_error',/no se pudieron asociar/]]){
-    const {client}=fixtureClient(observed);await client.query(directoryRoom);
-    const status=client.status(directoryRoom);assert.equal(status.result,result);assert.match(status.detail,detail);
-    assert.equal(status.consultedAt,new Date(now).toISOString());assert.equal(status.matched,0);
-  }
-});
-test('collector failure, wait timeout, HTTP failure and unavailable snapshot are not association errors',async()=>{
-  for(const [response,reason] of [[{estado:'error',motivo:'collector'},'collector'],[{estado:'error',motivo:'timeout'},'timeout'],
-    [{estado:'error'},'job'],[{estado:'listo'},'snapshot']]){
-    const client=createVersionsClient({fetcher:async(url,options)=>Response.json(options.method==='POST'?response:{disponible:false})});
-    await client.query(directoryRoom);const status=client.status(directoryRoom);
-    assert.equal(status.result,'error');assert.equal(status.reason,reason);assert.equal(status.consultedAt,undefined);
-  }
-  const client=createVersionsClient({fetcher:async()=>new Response('gateway',{status:503})});
-  await client.query(directoryRoom);assert.equal(client.status(directoryRoom).reason,'request');
+test('missing publication shows Versión no disponible and service errors allow manual retry',async()=>{
+  const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
+  const responses=[Response.json(snapshot), Response.json({disponible:false,sala_id:room.versionsRoomId,jugadores:[]}),
+    new Response('gateway',{status:503}), Response.json(snapshot)];
+  const client=createVersionsClient({now:()=>now,fetcher:async()=>responses.shift()});
+  await client.query(current);
+  assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
+  await client.query(current);
+  assert.equal(client.status(current).text,'Versión no disponible');
+  assert.equal(client.decorate(current).players[0].gameVersion,undefined);
+  await client.query(current);
+  assert.match(client.status(current).text,/Pulsá Consultar versiones/);
+  await client.query(current);
+  assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
 });
 
 test('Mario Kart also associates without directory IP using exact title',async()=>{
   const current={...room,players:[{...player,gameId:BigInt('0x'+observation.title_id).toString()}]};
-  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(options.method==='POST'?{estado:'listo'}:snapshot)});
+  const client=createVersionsClient({now:()=>now,fetcher:async(url,options)=>Response.json(snapshot)});
   await client.query(current);assert.equal(client.decorate(current).players[0].gameVersion,'4.0.1');
   assert.equal(client.decorate(current).players[0].gameTitleId,observation.title_id);
 });

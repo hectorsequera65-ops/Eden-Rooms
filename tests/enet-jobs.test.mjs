@@ -1,6 +1,5 @@
 import {test, mock, afterEach} from 'node:test';
 import assert from 'node:assert/strict';
-import {createVersionsClient} from '../assets/player-versions.js';
 import {jobsDB} from './helpers/jobs-db.mjs';
 import {PREVIEW_HOST,publicJobRequest,privateJobRequest,publicIPv4} from '../lib/enet-jobs.js';
 import {onRequestGet as versions} from '../functions/api/versiones-sala.js';
@@ -204,26 +203,13 @@ test('public job states distinguish collector failure and timeout from completed
   }finally{c.sqlite.close();}
 });
 
-test('a browser refresh crosses the SQLite queue and replaces each matching player version',async()=>{
+test('legacy queue completion replaces the stored snapshot',async()=>{
   const c=setup();try{
-    let now=Date.now();
+    const now=Date.now();
     const old=snapshot(now);
     c.sqlite.prepare('INSERT INTO versiones_salas VALUES (?,?,?,?)')
       .run('smash','Smash',JSON.stringify(old.jugadores),old.consultado_en);
-    const gameName=old.jugadores[0].juego;
-    const room={versionsRoomId:'smash',address:'69.24.117.72',port:20668,players:[
-      {nickname:'Eden',gameName,fakeIp:'10.166.1.1'},{nickname:'Another',gameName,fakeIp:'10.166.1.2'},{nickname:'No report',gameName,fakeIp:'10.166.1.3'}
-    ]};
-    const client=createVersionsClient({now:()=>now,fetcher:(url,options)=>{
-      const request=c.request(url,options.method==='POST'?JSON.parse(options.body):undefined);
-      return url.startsWith('/api/versiones-sala')
-        ? versions({env:c.env,request}) : publicJobRequest({env:c.env,request},now);
-    }});
-    const playerVersions=()=>client.decorate(room).players.map(p=>p.gameVersion);
-    await client.refresh([room]);
-    assert.deepEqual(playerVersions(),[undefined,undefined,undefined]);
-    assert.equal(c.sqlite.prepare('SELECT count(*) AS n FROM enet_version_jobs').get().n,0);
-    await client.query(room);
+    assert.equal((await c.ask('smash',now)).status,202);
     const job=(await (await c.poll({action:'claim'},now)).json()).trabajo;
     const observation=old.jugadores[0];
     const fresh={...snapshot(now),jugadores:[
@@ -232,9 +218,8 @@ test('a browser refresh crosses the SQLite queue and replaces each matching play
       {...observation,nombre:'No report',version:'',virtual_ip:'10.166.1.3'}
     ]};
     assert.equal((await c.poll({action:'complete',job_id:job.job_id,lease_token:job.lease_token,snapshot:fresh},now)).status,200);
-    now+=2000;await client.refresh([room]);
-    assert.deepEqual(playerVersions(),['13.0.4','7.0.0',undefined]);
-    assert.equal(client.status(room).result,'matched');
+    const result=await (await versions({env:c.env,request:c.request('/api/versiones-sala?id=smash')})).json();
+    assert.deepEqual(result.jugadores,fresh.jugadores);
   }finally{c.sqlite.close();}
 });
 
