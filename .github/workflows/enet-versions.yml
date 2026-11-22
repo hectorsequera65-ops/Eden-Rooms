@@ -1,33 +1,35 @@
 name: ENet versions
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to Cloudflare Preview after local tests
+        type: boolean
+        default: false
   schedule:
     - cron: '*/5 * * * *'
 
 permissions:
   contents: read
 
-concurrency:
-  group: enet-versions-preview
-  cancel-in-progress: false
-
 jobs:
   versions:
+    if: github.event_name != 'schedule' || vars.EDEN_ENET_PREVIEW_PUBLISH == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
       run:
         shell: bash
-    env:
-      EDEN_PAGES_URL: https://test-enet-versions-sralcer.eden-rooms.pages.dev
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -52,10 +54,50 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
           node --test tests/*.test.mjs
 
-      - name: Publish public room versions to Cloudflare Preview
-        if: vars.EDEN_ENET_PUBLISH == 'true'
-        env:
-          VERSIONES_API_KEY: ${{ secrets.VERSIONES_API_KEY }}
+      - name: Archive tested ENet client and runtime
+        id: archive-client
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish == true))
         run: |
+          cd work/enet-actions
+          tar -chf collector.tar eden-collector "deps/usr/lib/$(cc -print-multiarch)"/libenet.so.7
+
+      - name: Upload tested ENet client
+        if: steps.archive-client.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: enet-client
+          path: work/enet-actions/collector.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-preview:
+    needs: versions
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
+      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish == true))
+    environment: enet-preview
+    concurrency:
+      group: enet-versions-preview
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      EDEN_PAGES_URL: https://test-enet-versions-sralcer.eden-rooms.pages.dev
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: enet-client
+      - name: Publish public room versions to Cloudflare Preview
+        env:
+          ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
+        run: |
+          tar -xf collector.tar
           timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
-            --client ./work/enet-actions/eden-collector --scheduled
+            --client ./eden-collector --scheduled
