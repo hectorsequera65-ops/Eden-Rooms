@@ -37,6 +37,11 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
   const id = 'lobby-8-8-8-8-20668';
   assert.equal((await onRequestGet(context(null, {host:'example.test'}))).status, 404);
   assert.equal((await onRequestGet(context(null, {key:'invalid'}))).status, 401);
+  assert.equal((await onRequestPost(context({sala_id:'unauthorized'}, {key:''}))).status, 401);
+  assert.equal((await onRequestPost({ ...context({sala_id:'unauthorized'}),
+    env:{...env, ENET_PREVIEW_API_KEY:undefined}})).status, 503);
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.equal(db.prepare('SELECT count(*) AS count FROM enet_scheduled_snapshots').get().count, 0);
   assert.equal((await onRequestGet(context(null))).status, 200);
   const preview = {preview:true, key:'preview-fixture'};
   assert.equal((await onRequestGet(context(null, {preview:false, key:'fixture-key'}))).status, 401);

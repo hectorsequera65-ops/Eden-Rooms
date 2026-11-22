@@ -19,7 +19,6 @@ concurrency:
 
 jobs:
   versions:
-    if: github.ref == 'refs/heads/main'
     environment: enet-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -60,7 +59,10 @@ jobs:
           node --test tests/*.test.mjs
 
       - name: Publish public room versions to Cloudflare Preview
-        if: vars.EDEN_ENET_PUBLISH == 'true' && (github.event_name == 'schedule' || inputs.publish)
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish == true))
         env:
           ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: |
