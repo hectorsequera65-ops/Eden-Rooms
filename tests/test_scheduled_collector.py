@@ -24,7 +24,7 @@ class ScheduledCollectorTest(unittest.TestCase):
         def transport(base, path, snapshot=None, *, timeout):
             self.assertEqual((base, path, timeout), ('https://example.test', SCHEDULED_PATH, 6))
             if snapshot is None:
-                return {'salas': rooms}
+                return {'storage': 'ENET_PREVIEW_DB', 'salas': rooms}
             self.assertEqual(snapshot, {'sala_id': second['id'], 'jugadores': []})
             return {'ok': True}
 
@@ -63,7 +63,7 @@ class ScheduledCollectorTest(unittest.TestCase):
                 process.__enter__.return_value = process
                 process.stdout = f'EdenVersions: {diagnostic}\n'.splitlines(keepends=True) if diagnostic else []
                 process.wait.return_value = process.poll.return_value = status
-                with patch('collector.api', return_value={'salas': [target]}) as http, \
+                with patch('collector.api', return_value={'storage': 'ENET_PREVIEW_DB', 'salas': [target]}) as http, \
                         patch('collector.subprocess.Popen', return_value=process), \
                         patch('sys.stdout', new_callable=io.StringIO), \
                         patch('sys.stderr', new_callable=io.StringIO) as stderr:
@@ -81,7 +81,7 @@ class ScheduledCollectorTest(unittest.TestCase):
             with self.subTest(failure=failure):
                 def transport(base, path, snapshot=None, *, timeout):
                     if snapshot is None:
-                        return {'salas': [first, second]}
+                        return {'storage': 'ENET_PREVIEW_DB', 'salas': [first, second]}
                     if snapshot['sala_id'] == first['id']:
                         if isinstance(failure, ApiError):
                             raise failure
@@ -98,7 +98,7 @@ class ScheduledCollectorTest(unittest.TestCase):
                     self.assertIn(f"Publication failed for {first['id']}", stderr.getvalue())
 
     def test_missing_binary_fails(self):
-        with patch('collector.api', return_value={'salas': [room('8.8.8.8')]}), \
+        with patch('collector.api', return_value={'storage': 'ENET_PREVIEW_DB', 'salas': [room('8.8.8.8')]}), \
                 patch('collector.subprocess.Popen', side_effect=FileNotFoundError), \
                 patch('sys.stdout', new_callable=io.StringIO) as stdout, \
                 patch('sys.stderr', new_callable=io.StringIO):
@@ -106,7 +106,7 @@ class ScheduledCollectorTest(unittest.TestCase):
             self.assertIn('client errors: 1', stdout.getvalue())
 
     def test_room_list_authentication_failure_fails_cli_before_connecting(self):
-        with patch.dict('os.environ', {'VERSIONES_API_KEY': 'fixture'}, clear=True), \
+        with patch.dict('os.environ', {'ENET_PREVIEW_API_KEY': 'fixture'}, clear=True), \
                 patch('sys.argv', ['collector.py', '--base-url', 'https://example.test', '--scheduled']), \
                 patch('collector.api', side_effect=ApiError('HTTP 403')), \
                 patch('collector.collect') as enet, \
@@ -116,7 +116,7 @@ class ScheduledCollectorTest(unittest.TestCase):
             enet.assert_not_called()
 
     def test_invalid_list_never_connects(self):
-        with patch('collector.api', return_value={}), patch('collector.collect') as enet:
+        with patch('collector.api', return_value={'salas': []}), patch('collector.collect') as enet:
             with self.assertRaises(ApiError):
                 collect_public_rooms('https://example.test', 'fixture')
             enet.assert_not_called()

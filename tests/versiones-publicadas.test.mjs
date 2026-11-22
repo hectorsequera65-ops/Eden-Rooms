@@ -10,7 +10,7 @@ test('public Preview endpoint reads only published versions for an eligible room
   t.after(() => {mock.restoreAll(); db.close();});
   db.exec(readFileSync(new URL('../migrations/0002_enet_scheduled.sql', import.meta.url), 'utf8'));
   const reads = [];
-  const env = {DB:{
+  const env = {ENET_PREVIEW_DB:{
     prepare(sql) {
       reads.push(sql);
       assert.match(sql, /^SELECT /);

@@ -8,6 +8,7 @@ on:
         type: choice
         default: check-auth
         options:
+          - publish-preview
           - collect
           - check-auth
 
@@ -35,7 +36,7 @@ jobs:
         run: python3 backend/enet/collector.py --base-url https://test-enet-versions-sralcer.eden-rooms.pages.dev --check-auth
 
   versions:
-    if: github.ref == 'refs/heads/test/enet-versions-sralcer' && inputs.mode == 'collect'
+    if: github.ref == 'refs/heads/test/enet-versions-sralcer' && (inputs.mode == 'collect' || inputs.mode == 'publish-preview')
     environment: enet-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -76,9 +77,10 @@ jobs:
           node --test tests/*.test.mjs
 
       - name: Publish public room versions to Cloudflare Preview
-        if: vars.EDEN_ENET_PUBLISH == 'true'
+        if: inputs.mode == 'publish-preview' || vars.EDEN_ENET_PUBLISH == 'true'
         env:
           ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: |
+          python3 backend/enet/collector.py --base-url "$EDEN_PAGES_URL" --check-auth
           timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
             --client ./work/enet-actions/eden-collector --scheduled

@@ -5,14 +5,11 @@ import {lobbyRoomId, listEligibleLobbyRooms, readLobby} from '../../lib/public-l
 import {mergeVersionPlayers, SCHEDULED_VERSION_TTL_MS} from '../../assets/player-versions.js';
 
 async function previewRooms(lobby, env) {
-  if (env.ENET_SCHEDULED_ENABLED !== 'true' || !env.DB) {
-    return lobby.map(room => ({...room, versionsRoomId:lobbyRoomId(room)}));
-  }
   const eligible = listEligibleLobbyRooms(lobby);
   const now = Date.now();
   let snapshots = new Map();
-  try {
-    const {results} = await env.DB.prepare(
+  if (env.ENET_SCHEDULED_ENABLED === 'true' && env.ENET_PREVIEW_DB) try {
+    const {results} = await env.ENET_PREVIEW_DB.prepare(
       'SELECT sala_id,jugadores_json,actualizado_en FROM enet_scheduled_snapshots WHERE actualizado_en > ?'
     ).bind(new Date(now - SCHEDULED_VERSION_TTL_MS).toISOString()).all();
     snapshots = new Map(results.map(row => [row.sala_id, row]));

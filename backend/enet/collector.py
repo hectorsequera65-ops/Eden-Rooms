@@ -65,13 +65,14 @@ def api(base, path, payload=None, timeout=15):
         key = os.environ.get('AUTORIZACIONES_API_KEY')
         if key:
             headers['X-Collector-Key'] = key
-    preview_auth = PREVIEW_KEY in os.environ and (path == SCHEDULED_PATH or
-                                                 (path == VALIDATE_PATH and body is None))
+    preview_auth = path == SCHEDULED_PATH or (
+        PREVIEW_KEY in os.environ and path == VALIDATE_PATH and body is None
+    )
     if preview_auth:
-        if base != PREVIEW_URL or not os.environ[PREVIEW_KEY]:
+        if base != PREVIEW_URL or not os.environ.get(PREVIEW_KEY):
             raise ApiError(f'{PREVIEW_KEY} requires the canonical Preview URL and a configured key')
         headers['X-ENet-Preview-Key'] = os.environ[PREVIEW_KEY]
-    elif body is None and path in (VALIDATE_PATH, SCHEDULED_PATH):
+    elif body is None and path == VALIDATE_PATH:
         key = os.environ.get('VERSIONES_API_KEY')
         if key:
             headers['X-API-Key'] = key
@@ -250,6 +251,9 @@ def collect_public_rooms(base, binary):
     if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
         raise ApiError('Invalid scheduled room list')
 
+    if data.get('storage') != 'ENET_PREVIEW_DB':
+        raise ApiError('Scheduled API did not confirm the ENET_PREVIEW_DB contract')
+
     rooms = {}
     for room in data['salas']:
         if not isinstance(room, dict) or room.get('hasPassword') is not False:
@@ -270,6 +274,7 @@ def collect_public_rooms(base, binary):
         try:
             collect(binary, room, 5, publish, SCHEDULED_NICKNAME,
                     hard_timeout=7, first_snapshot=True)
+            print(f"Published room {room['id']}", flush=True)
             return 'published'
         except RoomUnavailable as error:
             print(f"Room unavailable {room['id']}: {safe_detail(error)}", file=sys.stderr)
@@ -323,7 +328,7 @@ def main():
         parser.error('Invalid duration/interval')
     if args.scheduled and args.room_id is not None:
         parser.error('--scheduled always processes the public lobby')
-    key_name = PREVIEW_KEY if PREVIEW_KEY in os.environ and (args.check_auth or args.scheduled) else 'VERSIONES_API_KEY'
+    key_name = PREVIEW_KEY if args.scheduled or (args.check_auth and PREVIEW_KEY in os.environ) else 'VERSIONES_API_KEY'
     if (args.send or args.validate_send or args.check_auth or args.scheduled) and not os.environ.get(key_name):
         parser.error(f'{key_name} is required for publishing or checking versions')
     if args.scheduled:

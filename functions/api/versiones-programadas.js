@@ -1,21 +1,28 @@
-import {previewOnly, respond} from '../../lib/enet-jobs.js';
+import {scheduledPreview, respond} from '../../lib/enet-preview.js';
 import {findLobbyRoom, listEligibleLobbyRooms, readLobby} from '../../lib/public-lobby.js';
-import {authorizeVersionRequest, normalizeVersionSnapshot} from '../../lib/version-snapshots.js';
+import {authorizePreviewSnapshot, normalizeVersionSnapshot} from '../../lib/version-snapshots.js';
 
 function guard(request, env) {
-  if (!previewOnly(request, env) || env.ENET_SCHEDULED_ENABLED !== 'true') {
+  if (!scheduledPreview(request, env)) {
     return respond({error:'No disponible'}, 404);
   }
-  return authorizeVersionRequest(request, env, {allowPreview:true}) ||
-    (!env.DB ? respond({error:'Base de datos no configurada'}, 503) : null);
+  return authorizePreviewSnapshot(request, env) ||
+    (!env.ENET_PREVIEW_DB ? respond({error:'Base de datos no configurada'}, 503) : null);
 }
 
 export async function onRequestGet({request, env}) {
   const denied = guard(request, env);
   if (denied) return denied;
   try {
+    await env.ENET_PREVIEW_DB.prepare(
+      'SELECT sala_id, jugadores_json, actualizado_en FROM enet_scheduled_snapshots LIMIT 0'
+    ).first();
+  } catch {
+    return respond({error:'Esquema de Preview no disponible'}, 503);
+  }
+  try {
     const lobby = await readLobby({fresh:true});
-    return respond({salas:[...listEligibleLobbyRooms(lobby)].map(([id, room]) => ({
+    return respond({storage:'ENET_PREVIEW_DB', salas:[...listEligibleLobbyRooms(lobby)].map(([id, room]) => ({
       id, direccion:room.address, puerto:Number(room.port), hasPassword:false
     }))});
   } catch {
@@ -43,15 +50,11 @@ export async function onRequestPost({request, env}) {
   }
   try {
     if (!await findLobbyRoom(id)) return respond({error:'Sala pública no disponible'}, 409);
-    await env.DB.batch([
-      env.DB.prepare(`DELETE FROM enet_scheduled_snapshots WHERE actualizado_en < ?`)
-        .bind(new Date(now - 86400000).toISOString()),
-      env.DB.prepare(`INSERT INTO enet_scheduled_snapshots(sala_id,jugadores_json,actualizado_en)
+    await env.ENET_PREVIEW_DB.prepare(`INSERT INTO enet_scheduled_snapshots(sala_id,jugadores_json,actualizado_en)
         VALUES (?,?,?) ON CONFLICT(sala_id) DO UPDATE SET
         jugadores_json=excluded.jugadores_json,actualizado_en=excluded.actualizado_en
         WHERE excluded.actualizado_en >= enet_scheduled_snapshots.actualizado_en`)
-        .bind(id, JSON.stringify(players), new Date(when).toISOString())
-    ]);
+        .bind(id, JSON.stringify(players), new Date(when).toISOString()).run();
     return respond({ok:true});
   } catch {
     return respond({error:'No se pudo guardar la muestra'}, 503);
