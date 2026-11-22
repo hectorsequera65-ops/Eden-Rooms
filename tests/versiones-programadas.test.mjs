@@ -17,8 +17,7 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
         first: () => statement.get(...values),
         run: () => statement.run(...values)
       })};
-    },
-    async batch(statements) { return statements.map(statement => statement.run()); }
+    }
   };
   const room = {address:'8.8.8.8', port:20668, hasPassword:false,
     players:[{nickname:'Player', gameName:'Game', fakeIp:'10.0.0.2'}]};
@@ -56,10 +55,14 @@ test('scheduled Preview lists eligible rooms, revalidates writes and publishes t
 
   const sample = {sala_id:id, consultado_en:new Date().toISOString(),
     jugadores:[{nombre:'Player', juego:'Game', virtual_ip:'10.0.0.2', version:'1.2.3'}]};
+  const archived = 'lobby-9-9-9-9-20668';
+  db.prepare('INSERT INTO enet_scheduled_snapshots VALUES (?, ?, ?)')
+    .run(archived, '[]', '2000-01-01T00:00:00.000Z');
   room.hasPassword = true;
   assert.equal((await onRequestPost(context(sample))).status, 409);
   room.hasPassword = false;
   assert.equal((await onRequestPost(context(sample, preview))).status, 200);
+  assert.ok(db.prepare('SELECT 1 FROM enet_scheduled_snapshots WHERE sala_id = ?').get(archived));
   const older = {...sample, consultado_en:new Date(Date.parse(sample.consultado_en)-1000).toISOString(), jugadores:[]};
   assert.equal((await onRequestPost(context(older))).status, 200);
   const readPublished = () => onRequest({

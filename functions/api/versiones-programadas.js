@@ -50,15 +50,11 @@ export async function onRequestPost({request, env}) {
   }
   try {
     if (!await findLobbyRoom(id)) return respond({error:'Sala pública no disponible'}, 409);
-    await env.ENET_PREVIEW_DB.batch([
-      env.ENET_PREVIEW_DB.prepare(`DELETE FROM enet_scheduled_snapshots WHERE actualizado_en < ?`)
-        .bind(new Date(now - 86400000).toISOString()),
-      env.ENET_PREVIEW_DB.prepare(`INSERT INTO enet_scheduled_snapshots(sala_id,jugadores_json,actualizado_en)
+    await env.ENET_PREVIEW_DB.prepare(`INSERT INTO enet_scheduled_snapshots(sala_id,jugadores_json,actualizado_en)
         VALUES (?,?,?) ON CONFLICT(sala_id) DO UPDATE SET
         jugadores_json=excluded.jugadores_json,actualizado_en=excluded.actualizado_en
         WHERE excluded.actualizado_en >= enet_scheduled_snapshots.actualizado_en`)
-        .bind(id, JSON.stringify(players), new Date(when).toISOString())
-    ]);
+        .bind(id, JSON.stringify(players), new Date(when).toISOString()).run();
     return respond({ok:true});
   } catch {
     return respond({error:'No se pudo guardar la muestra'}, 503);
