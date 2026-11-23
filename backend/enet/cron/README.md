@@ -57,10 +57,17 @@ las publicaciones de Preview.
 
 ## Prueba en la nube con autorización
 
-El cron de GitHub sigue habilitado durante esta prueba. El workflow ya existe
-en la rama por defecto, requisito de GitHub para poder despacharlo sobre una
-rama de prueba. Confirmar en la primera corrida autorizada que el despacho
+Durante la prueba en la rama de integración, el cron de GitHub sigue
+habilitado en `main`. GitHub requiere que el workflow exista en la rama
+por defecto para poder despacharlo sobre una rama de prueba. Confirmar en la primera corrida autorizada que el despacho
 use los inputs definidos en la rama de integración. [Eventos de GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
+
+Un despacho manual de la rama de integración ejecuta `versions` y omite
+`publish-preview`, aunque se seleccione `publish: true` sin turno. Para
+verificar una publicación, revisar la conclusión del job `publish-preview`
+y su línea `Published: N/M`. Comparar `actualizado_en` en
+`enet_scheduled_snapshots` de `eden-rooms-test-db` con `consultado_en` en
+`/api/versiones-publicadas?id=ID_DE_SALA` para una sala pública con versiones.
 
 Desde la raíz, publicar la rama cuando corresponda. Usar Node 22 o superior y
 la cuenta de Cloudflare autorizada. El Worker de prueba existente ya tiene
@@ -68,24 +75,15 @@ el cron de cinco minutos y el secreto de despacho. Para actualizarlo con
 autorización, conservar el nombre, el Durable Object y el secreto, y usar
 la configuración de Wrangler con la rama de prueba y `publish: false`.
 Usar un commit con el prefijo `[CF-Pages-Skip]` para omitir el despliegue
-automático de Pages. El siguiente bloque con `--secrets-file` corresponde
-al alta inicial o a una sustitución autorizada del secreto.
+automático de Pages. Para actualizar el Worker existente, usar `--keep-vars`
+y omitir `--secrets-file`. Indicar explícitamente la rama y el modo de
+publicación, y verificar ambos valores en la versión activa con
+`wrangler versions view`.
 
 ```bash
 git push -u origin integration/enet-cloudflare-preview
-npx --yes wrangler@4.166.0 login
-(
-  set -e
-  umask 077
-  enet_secret_file=$(mktemp)
-  trap 'rm -f "$enet_secret_file"' EXIT
-  read -rsp 'PAT fine-grained nuevo de GitHub: ' enet_dispatch_pat
-  printf '\n'
-  printf 'ENET_GITHUB_DISPATCH_TOKEN=%s\n' "$enet_dispatch_pat" > "$enet_secret_file"
-  unset enet_dispatch_pat
-  npx --yes wrangler@4.166.0 deploy --config backend/enet/cron/wrangler.toml \
-    --secrets-file "$enet_secret_file"
-)
+npx --yes wrangler@4.166.0 deploy --config backend/enet/cron/wrangler.toml \
+  --keep-vars --var ENET_CRON_REF:integration/enet-cloudflare-preview ENET_CRON_PUBLISH:false
 ```
 
 ```bash
@@ -100,46 +98,50 @@ Dejar transcurrir al menos tres turnos después de la propagación. Confirmar un
 despacho exitoso por turno, el job `versions` exitoso y `publish-preview`
 omitido. Correlacionar por el turno del título de la corrida y del log del
 Worker. Confirmar métricas y eventos de CPU en Cloudflare. Si falla, mantener
-el cron de GitHub y corregir antes de avanzar.
+`ENET_CRON_PUBLISH=false` y corregir antes de avanzar.
 
-## Cambio de origen con autorización
+## Activación con autorización
 
-Antes del push autorizado, configurar el entorno `enet-preview` para permitir
-despliegues solo desde la rama exacta `main`. Verificar
-que `ENET_PREVIEW_API_KEY` exista exclusivamente en ese entorno y que
-`main` requiera revisión antes de aceptar cambios al workflow.
-Confirmar que el alias de Pages de `test/enet-versions-sralcer` esté en Preview
-y que su binding `ENET_PREVIEW_DB` apunte a `eden-rooms-test-db`. Confirmar
-que el ID de esa base esté ausente de los bindings D1 de producción.
-Pages tiene habilitados los despliegues automáticos de producción desde
-`main`. Conservar el prefijo `[CF-Pages-Skip]` en el mensaje del commit que
-llegue a esa rama. [Omisión del despliegue de Pages](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#skipping-a-build-via-a-commit-message)
+El workflow actualizado elimina el evento `schedule` de GitHub. El Worker
+es el único disparador periódico. Los PR y los despachos manuales siguen
+disponibles. La publicación requiere un despacho con `publish: true` desde
+`main`, la variable `EDEN_ENET_PREVIEW_PUBLISH=true` y el artefacto de la
+compilación probada. Los despachos con turno requieren además
+`EDEN_ENET_CRON_SOURCE=cloudflare` y el primer intento de la corrida.
 
-Después de la prueba y de una fusión autorizada, verificar en el `main` remoto
-que esté el workflow actualizado, que `EDEN_ENET_PREVIEW_PUBLISH` siga habilitada
-y que la publicación de Preview del workflow funcione. Con autorización
-para activar la publicación, desplegar el mismo Worker
-para `main` con publicación y comprobar por el título que aparece un nuevo
-turno de Cloudflare. Hasta el cambio de selector ese turno se omite y el cron
-existente sigue siendo el publicador automático. Entre turnos y con el job de
-publicación anterior finalizado, cambiar el selector y comprobar que el próximo
-turno de Cloudflare complete `publish-preview` y actualice Preview.
+1. Completar la prueba de tres turnos con `ENET_CRON_PUBLISH=false`. Verificar
+   la versión activa del Worker y el entorno `enet-preview`. Restringir ese
+   entorno a la rama exacta `main` y conservar el secreto de Preview existente.
+   Confirmar que el alias de Pages corresponda a Preview, que su binding
+   `ENET_PREVIEW_DB` tenga el ID de `eden-rooms-test-db` y que producción
+   carezca de ese binding y de ese ID.
+2. Incorporar el workflow actualizado a `main` con autorización posterior.
+   Usar el prefijo `[CF-Pages-Skip]` en el mensaje del commit que llegue a
+   `main` para omitir el despliegue automático de Pages. Comprobar que el
+   workflow remoto carezca de `schedule` y esperar a que terminen los jobs
+   programados que ya estuvieran activos o en cola. Habrá una pausa de
+   publicación automática entre la incorporación y la activación del Worker.
+   [Omisión del despliegue de Pages](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#skipping-a-build-via-a-commit-message)
+3. Apuntar el Worker a `main` manteniendo `ENET_CRON_PUBLISH=false`. Verificar
+   un turno exitoso de pruebas en `main` con `publish-preview` omitido.
+4. Tras esas comprobaciones y con autorización para activar la publicación,
+   fijar `EDEN_ENET_CRON_SOURCE=cloudflare` en GitHub, conservar
+   `EDEN_ENET_PREVIEW_PUBLISH=true` y actualizar únicamente el Worker con
+   `ENET_CRON_REF=main` y `ENET_CRON_PUBLISH=true`. Mantener `--keep-vars`
+   y usar el secreto ya instalado. Para pausar la publicación automática,
+   cambiar `EDEN_ENET_CRON_SOURCE` a un valor vacío o devolver el Worker a
+   `ENET_CRON_PUBLISH=false`. Un job en curso puede terminar.
 
-```bash
-npx --yes wrangler@4.166.0 deploy --config backend/enet/cron/wrangler.toml \
-  --var ENET_CRON_REF:main ENET_CRON_PUBLISH:true
-gh run list -R hectorsequera65-ops/Eden-Rooms -w enet-versions.yml \
-  -b main -e workflow_dispatch -L 10
-gh variable set EDEN_ENET_CRON_SOURCE --body cloudflare -R hectorsequera65-ops/Eden-Rooms
-gh run watch RUN_ID --exit-status -R hectorsequera65-ops/Eden-Rooms
-```
+## Comprobación con la laptop apagada
 
-Si la publicación falla o la cadencia no es aceptable, restaurar el origen
-nativo con el siguiente comando. El job en curso puede terminar. La declaración
-`schedule` sigue en el workflow como respaldo. Retirar el trigger del Worker
-desde el panel de Cloudflare si se abandona la prueba y considerar el tiempo de
-propagación.
-
-```bash
-gh variable set EDEN_ENET_CRON_SOURCE --body github -R hectorsequera65-ops/Eden-Rooms
-```
+Después de la propagación, anotar la hora UTC y el `consultado_en` de una
+sala pública con versiones. Apagar la laptop durante al menos tres turnos.
+Desde otro equipo o al volver, consultar el historial de GitHub Actions.
+Buscar una corrida `workflow_dispatch` titulada `ENet Cloudflare slot …`
+por cada turno transcurrido, iniciada después de la hora anotada. Verificar
+que `publish-preview` terminó con éxito y que `Published: N/M` muestra
+`N > 0`. Confirmar que durante ese intervalo no hubo corridas `schedule` y
+que un `actualizado_en` nuevo de `eden-rooms-test-db` coincide con
+`consultado_en` de la misma sala en el endpoint de Preview. Si la rotación
+no consultó la sala inicial, usar una sala publicada en esos turnos. El cron
+programa cada cinco minutos y la cola de GitHub puede demorar el inicio.

@@ -14,24 +14,18 @@ on:
         description: UTC slot in epoch milliseconds (set by the Cloudflare Worker)
         type: string
         default: ''
-  schedule:
-    - cron: '*/5 * * * *'
-
 permissions:
   contents: read
 
 jobs:
   versions:
     if: >-
-      (github.event_name != 'schedule' ||
-        (github.ref == 'refs/heads/main' && vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-          vars.EDEN_ENET_CRON_SOURCE != 'cloudflare')) &&
-      (github.event_name != 'workflow_dispatch' || inputs.cloudflare_slot == '' || (github.run_attempt == 1 &&
-        (!inputs.publish || (github.ref == 'refs/heads/main' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
+      github.event_name != 'workflow_dispatch' || inputs.cloudflare_slot == '' ||
+      github.run_attempt == '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      preview_artifact: ${{ steps.upload-client.outcome == 'success' }}
+      preview_artifact_id: ${{ steps.upload-client.outputs.artifact-id }}
     defaults:
       run:
         shell: bash
@@ -67,28 +61,23 @@ jobs:
           node --test tests/*.test.mjs
 
       - name: Archive tested ENet client and runtime
-        id: archive-client
         if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish == true &&
           github.ref == 'refs/heads/main' &&
           vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-          ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
-              (inputs.cloudflare_slot == '' ||
-                (github.run_attempt == 1 && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
+          (inputs.cloudflare_slot == '' || vars.EDEN_ENET_CRON_SOURCE == 'cloudflare')
+        id: archive-client
         run: |
-          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
-            exit 0
-          fi
           cd work/enet-actions
           tar -chf collector.tar eden-collector "deps/usr/lib/$(cc -print-multiarch)"/libenet.so.7
-          echo 'ready=true' >> "$GITHUB_OUTPUT"
 
       - name: Upload tested ENet client
         id: upload-client
-        if: steps.archive-client.outputs.ready == 'true'
+        if: steps.archive-client.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
-          name: enet-client
+          name: enet-client-${{ github.run_attempt }}
           path: work/enet-actions/collector.tar
           if-no-files-found: error
           retention-days: 1
@@ -96,12 +85,14 @@ jobs:
   publish-preview:
     needs: versions
     if: >-
-      needs.versions.outputs.preview_artifact == 'true' &&
+      needs.versions.result == 'success' &&
+      needs.versions.outputs.preview_artifact_id != '' &&
       github.ref == 'refs/heads/main' &&
       vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-      ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
-          (inputs.cloudflare_slot == '' || (github.run_attempt == 1 && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish == true &&
+      (inputs.cloudflare_slot == '' ||
+        (github.run_attempt == '1' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))
     environment: enet-preview
     concurrency:
       group: enet-versions-preview
@@ -114,7 +105,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v7
         with:
-          name: enet-client
+          artifact-ids: ${{ needs.versions.outputs.preview_artifact_id }}
       - name: Publish public room versions to Cloudflare Preview
         env:
           ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
