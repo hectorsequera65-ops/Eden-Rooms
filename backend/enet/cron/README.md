@@ -43,7 +43,10 @@ el job de publicación. [Permisos del dispatch](https://docs.github.com/en/rest/
 
 El Durable Object serializa los intentos y confirma la reserva en SQLite antes
 del POST. Cada turno válido se intenta como máximo una vez en este Worker.
-Se descartan turnos vencidos, futuros o repetidos. Ante un HTTP fallido o un timeout, el
+La marca de tiempo de Cloudflare se redondea hacia abajo al inicio del turno
+UTC de cinco minutos. Se descartan marcas inválidas y turnos iguales o
+anteriores al último reservado. La demora de ejecución no invalida un turno
+por sí sola. Ante un HTTP fallido o un timeout, el
 turno se pierde si GitHub no llegó a aceptarlo. El siguiente turno sigue su
 curso. Un HTTP 200 o 204 solo confirma el despacho. GitHub puede demorar la
 ejecución y la concurrencia de publicación puede reemplazar un job pendiente
@@ -56,15 +59,20 @@ las publicaciones de Preview.
 
 El cron de GitHub sigue habilitado durante esta prueba. El workflow ya existe
 en la rama por defecto, requisito de GitHub para poder despacharlo sobre una
-rama de prueba. [Eventos de GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
+rama de prueba. Confirmar en la primera corrida autorizada que el despacho
+use los inputs definidos en la rama de integración. [Eventos de GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 
 Desde la raíz, publicar la rama cuando corresponda. Usar Node 22 o superior y
-una cuenta de Cloudflare autorizada con un cupo de cron libre. Verificar en el
-panel que el nombre del Worker sea nuevo. El primer despliegue usa por defecto
-la rama de prueba y `publish: false`.
+la cuenta de Cloudflare autorizada. El Worker de prueba existente ya tiene
+el cron de cinco minutos y el secreto de despacho. Para actualizarlo con
+autorización, conservar el nombre, el Durable Object y el secreto, y usar
+la configuración de Wrangler con la rama de prueba y `publish: false`.
+Usar un commit con el prefijo `[CF-Pages-Skip]` para omitir el despliegue
+automático de Pages. El siguiente bloque con `--secrets-file` corresponde
+al alta inicial o a una sustitución autorizada del secreto.
 
 ```bash
-git push -u origin feat/enet-cloudflare-cron
+git push -u origin integration/enet-cloudflare-preview
 npx --yes wrangler@4.166.0 login
 (
   set -e
@@ -84,7 +92,7 @@ npx --yes wrangler@4.166.0 login
 npx --yes wrangler@4.166.0 tail --config backend/enet/cron/wrangler.toml
 # En otra terminal
 gh run list -R hectorsequera65-ops/Eden-Rooms -w enet-versions.yml \
-  -b feat/enet-cloudflare-cron -e workflow_dispatch -L 10
+  -b integration/enet-cloudflare-preview -e workflow_dispatch -L 10
 gh run view RUN_ID -R hectorsequera65-ops/Eden-Rooms
 ```
 
@@ -96,9 +104,21 @@ el cron de GitHub y corregir antes de avanzar.
 
 ## Cambio de origen con autorización
 
+Antes del push autorizado, configurar el entorno `enet-preview` para permitir
+despliegues solo desde la rama exacta `main`. Verificar
+que `ENET_PREVIEW_API_KEY` exista exclusivamente en ese entorno y que
+`main` requiera revisión antes de aceptar cambios al workflow.
+Confirmar que el alias de Pages de `test/enet-versions-sralcer` esté en Preview
+y que su binding `ENET_PREVIEW_DB` apunte a `eden-rooms-test-db`. Confirmar
+que el ID de esa base esté ausente de los bindings D1 de producción.
+Pages tiene habilitados los despliegues automáticos de producción desde
+`main`. Conservar el prefijo `[CF-Pages-Skip]` en el mensaje del commit que
+llegue a esa rama. [Omisión del despliegue de Pages](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#skipping-a-build-via-a-commit-message)
+
 Después de la prueba y de una fusión autorizada, verificar en el `main` remoto
 que esté el workflow actualizado, que `EDEN_ENET_PREVIEW_PUBLISH` siga habilitada
-y que la publicación de Preview del workflow funcione. Desplegar el mismo Worker
+y que la publicación de Preview del workflow funcione. Con autorización
+para activar la publicación, desplegar el mismo Worker
 para `main` con publicación y comprobar por el título que aparece un nuevo
 turno de Cloudflare. Hasta el cambio de selector ese turno se omite y el cron
 existente sigue siendo el publicador automático. Entre turnos y con el job de

@@ -24,11 +24,14 @@ jobs:
   versions:
     if: >-
       (github.event_name != 'schedule' ||
-        (vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare')) &&
+        (github.ref == 'refs/heads/main' && vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
+          vars.EDEN_ENET_CRON_SOURCE != 'cloudflare')) &&
       (github.event_name != 'workflow_dispatch' || inputs.cloudflare_slot == '' || (github.run_attempt == 1 &&
         (!inputs.publish || (github.ref == 'refs/heads/main' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      preview_artifact: ${{ steps.upload-client.outcome == 'success' }}
     defaults:
       run:
         shell: bash
@@ -70,13 +73,19 @@ jobs:
           vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
           ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
             (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
-              (inputs.cloudflare_slot == '' || vars.EDEN_ENET_CRON_SOURCE == 'cloudflare')))
+              (inputs.cloudflare_slot == '' ||
+                (github.run_attempt == 1 && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))))
         run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            exit 0
+          fi
           cd work/enet-actions
           tar -chf collector.tar eden-collector "deps/usr/lib/$(cc -print-multiarch)"/libenet.so.7
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
 
       - name: Upload tested ENet client
-        if: steps.archive-client.outcome == 'success'
+        id: upload-client
+        if: steps.archive-client.outputs.ready == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: enet-client
@@ -87,6 +96,7 @@ jobs:
   publish-preview:
     needs: versions
     if: >-
+      needs.versions.outputs.preview_artifact == 'true' &&
       github.ref == 'refs/heads/main' &&
       vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
       ((github.event_name == 'schedule' && vars.EDEN_ENET_CRON_SOURCE != 'cloudflare') ||
@@ -98,8 +108,6 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    env:
-      EDEN_PAGES_URL: https://test-enet-versions-sralcer.eden-rooms.pages.dev
     steps:
       - uses: actions/checkout@v5
         with:
@@ -112,5 +120,6 @@ jobs:
           ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
         run: |
           tar -xf collector.tar
-          timeout 210s python3 -u backend/enet/collector.py --base-url "$EDEN_PAGES_URL" \
+          timeout 210s python3 -u backend/enet/collector.py \
+            --base-url 'https://test-enet-versions-sralcer.eden-rooms.pages.dev' \
             --client ./eden-collector --scheduled

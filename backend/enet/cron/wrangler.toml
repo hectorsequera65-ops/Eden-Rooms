@@ -5,7 +5,7 @@ workers_dev = false
 preview_urls = false
 
 [vars]
-ENET_CRON_REF = "feat/enet-cloudflare-cron"
+ENET_CRON_REF = "integration/enet-cloudflare-preview"
 ENET_CRON_PUBLISH = "false"
 
 [triggers]

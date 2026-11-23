@@ -11,8 +11,9 @@ export class DispatchSlots {
   }
 
   fetch(request) {
-    const slot = Number(new URL(request.url).pathname.slice(1));
-    if (request.method !== 'POST' || !isSlot(slot)) {
+    const path = new URL(request.url).pathname;
+    const slot = Number(path.slice(1));
+    if (request.method !== 'POST' || !isSlot(slot) || path !== `/${slot}`) {
       return new Response(null, { status: 400 });
     }
     // Synchronous SQLite operations prevent interleaving. The output gate
@@ -27,12 +28,13 @@ export class DispatchSlots {
 
 export default {
   async scheduled(event, env) {
-    const slot = event.scheduledTime;
-    const age = Date.now() - slot;
-    if (!isSlot(slot) || age < 0 || age >= INTERVAL_MS) {
-      console.warn('ENet cron skipped an invalid or expired slot', slot);
+    const scheduledTime = event.scheduledTime;
+    if (!Number.isSafeInteger(scheduledTime) || scheduledTime < INTERVAL_MS) {
+      console.warn('ENet cron skipped an invalid slot', scheduledTime);
       return;
     }
+    // Cloudflare can report a scheduled timestamp within the five-minute slot.
+    const slot = scheduledTime - (scheduledTime % INTERVAL_MS);
 
     const publish = env.ENET_CRON_PUBLISH === 'true';
     if (!env.ENET_GITHUB_DISPATCH_TOKEN || !env.ENET_CRON_REF ||
