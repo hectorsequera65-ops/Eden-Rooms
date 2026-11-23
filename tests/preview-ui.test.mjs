@@ -28,7 +28,7 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       const players=[{nickname:'Eden',gameName:mario,fakeIp:'10.0.0.10'},{nickname:'SataHT',gameName:smash,fakeIp:'10.0.0.11'},
         {nickname:'SinVersion',gameName:mario},{nickname:'Repetido',gameName:smash,fakeIp:'10.0.0.1'},
         {nickname:'Repetido',gameName:smash,fakeIp:'10.0.0.2'}];
-      const rooms=[{name:'Sala Preview 20668',address:'8.8.8.8',port:20668,maxPlayers:32,preferredGameName:smash,players,versionsRoomId:'lobby-8-8-8-8-20668'},
+      const rooms=[{name:'Sala Preview 20668 & Pokémon 🏁',password:'no-compartir',token:'no-compartir',address:'8.8.8.8',port:20668,maxPlayers:32,preferredGameName:smash,players,versionsRoomId:'lobby-8-8-8-8-20668'},
         {name:'Otra sala',address:'9.9.9.9',port:6007,maxPlayers:32,preferredGameName:mario,players:[{...players[0],gameVersion:'Versión desconocida'}],versionsRoomId:'lobby-9-9-9-9-6007'}];
       const snapshot={disponible:true,sala_id:'lobby-8-8-8-8-20668',consultado_en:new Date(now-3600000).toISOString(),endpoint:{direccion:"8.8.8.8",puerto:20668},jugadores:[
         {nombre:'Eden',juego:mario,virtual_ip:'10.0.0.10',version:'4.0.1',title_id:'0100152000022000'},
@@ -115,6 +115,37 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('.room-open .player-name')).toContainText('Eden');
       await expect(page.locator('.room-open .player-game')).toHaveText(mario);
       await expect(page.locator('.room-open .player-row')).not.toContainText(/desconocida|no disponible|sin consultar/i);
+      await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+      await page.locator('[data-room-toggle="8.8.8.8:20668"]').click();
+      await page.locator('.room-open [data-share]').click();
+      const share=page.getByRole('dialog',{name:'Compartir sala'});
+      await expect(share).toBeVisible();
+      const link=new URL('#sala=8.8.8.8%3A20668',page.url()).href;
+      const message=`Sala: ${rooms[0].name}\nJuego: ${smash}\nIP: 8.8.8.8\nPuerto UDP: 20668\n${link}`;
+      await expect(share.getByRole('link',{name:'Enviar por WhatsApp'}))
+        .toHaveAttribute('href','https://wa.me/?text='+encodeURIComponent(message));
+      await share.getByRole('button',{name:'Copiar enlace'}).click();
+      await expect(share.getByRole('status')).toHaveText('Enlace copiado.');
+      assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),link);
+      await share.getByRole('button',{name:'Copiar datos de conexión'}).click();
+      await expect(share.getByRole('status')).toHaveText('Datos de conexión copiados.');
+      assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),
+        `Sala: ${rooms[0].name}\nIP: 8.8.8.8\nPuerto UDP: 20668`);
+      await page.keyboard.press('Escape');
+      await expect(share).toBeHidden();
+      await page.locator('.room-open [data-share-chat]').click();
+      await expect(page.locator('#chatPanel')).toBeVisible();
+      await page.goto(link);
+      await expect(page.locator('.room-open [data-room-toggle="8.8.8.8:20668"]')).toBeVisible();
+      rooms[1]={name:'Sala sin puerto publicado',address:'9.9.9.9',maxPlayers:4,players:[]};
+      await page.reload();
+      await page.locator('[data-room-toggle="9.9.9.9:"]').click();
+      await page.locator('.room-open [data-share]').click();
+      await expect(share.getByRole('link',{name:'Enviar por WhatsApp'})).toHaveAttribute(
+        'href','https://wa.me/?text='+encodeURIComponent('Sala: Sala sin puerto publicado\nIP: 9.9.9.9'));
+      await share.getByRole('button',{name:'Copiar enlace'}).click();
+      await expect(share.getByRole('status')).toHaveText('Enlace copiado.');
+      assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),new URL('/',link).href);
       assert.deepEqual(unexpectedRequests,[]);
       assert.deepEqual(errors,[],'page must have no JavaScript errors');
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'layout must fit viewport');
