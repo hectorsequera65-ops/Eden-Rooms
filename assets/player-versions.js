@@ -30,17 +30,23 @@ export function playerGameVersion(player, now = Date.now()) {
   }
   return '';
 }
+const UNKNOWN_VERSIONS = /^(?:n\/?a|(?:version )?(?:unknown|unavailable|not (?:available|queried)|sin consultar|no consultad[ao]|no informad[ao]|desconocid[ao]|no disponible|sin datos|sin version)|[-–—]+)$/i;
+export function displayedPlayerVersion(player) {
+  const version = playerGameVersion(player);
+  const label = version.normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, ' ');
+  return UNKNOWN_VERSIONS.test(label) ? '' : version;
+}
 export function playerGameLabel(player) {
-  const game = String(player.gameName || '').trim(), version = game ? playerGameVersion(player) : '';
+  const game = String(player.gameName || '').trim(), version = game ? displayedPlayerVersion(player) : '';
   return game + (version ? ' · v' + version.replace(/^v/i, '') : '');
 }
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function playerListMarkup(players) {
   return players.map(player => {
-    const game = String(player.gameName || '').trim(), version = game ? playerGameVersion(player) : '';
+    const game = String(player.gameName || '').trim(), version = game ? displayedPlayerVersion(player) : '';
     return '<div class="player-row"><span class="player-name">👤 ' + escapeHTML(player.nickname || 'Sin nombre') + '</span><span class="player-details">'
       + (game ? '<span class="player-game">' + escapeHTML(game) + '</span>' : '')
-      + (version ? '<span class="player-version">Versión ' + escapeHTML(version) + '</span>' : '<span class="player-version-unknown">Versión sin consultar</span>') + '</span></div>';
+      + (version ? '<span class="player-version">Versión ' + escapeHTML(version) + '</span>' : '') + '</span></div>';
   }).join('');
 }
 export function mergeVersionPlayers(players, observations, {observedAt, now = Date.now(), scheduled = false} = {}) {

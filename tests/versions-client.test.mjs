@@ -81,7 +81,21 @@ test('directory roster remains live without manual queries',async()=>{
   const next={...room,players:[{nickname:'New',gameName:'Game'}]};
   client.retain([next]);
   assert.deepEqual(client.decorate(next).players,next.players);assert.equal(calls,0);
-  assert.match(playerListMarkup(next.players),/Versión sin consultar/);
+  const markup = playerListMarkup(next.players);
+  assert.match(markup, /New/);
+  assert.match(markup, /Game/);
+  assert.doesNotMatch(markup, /player-version|Versión/);
+});
+test('version placeholders stay out of player rows without changing player data',()=>{
+  for (const gameVersion of [null, ' ', 'Versión sin consultar', 'No disponible', 'Desconocida', 'Unknown', 'N/A']) {
+    const player = {nickname:'Ana', gameName:'Game', gameVersion};
+    const markup = playerListMarkup([player]);
+    assert.match(markup, /Ana/);
+    assert.match(markup, /Game/);
+    assert.doesNotMatch(markup, /player-version|Versión/);
+    assert.equal(player.gameVersion, gameVersion);
+  }
+  assert.match(playerListMarkup([{nickname:'Ana', gameName:'Game', gameVersion:'beta-1'}]), /Versión beta-1/);
 });
 test('versions require unique name/IP, current game/title and uninterrupted presence',async()=>{
   const current={...room,players:[{...player,virtual_ip:observation.virtual_ip}]};
