@@ -283,6 +283,7 @@ function syncDialogScrollLock(){
   dialog.showModal=function(){originalShowModal();syncDialogScrollLock();};
 });
 $('closeDescriptionDialog').onclick=()=>$('descriptionDialog').close();$('descriptionDialog').addEventListener('click',e=>{if(e.target===$('descriptionDialog'))$('descriptionDialog').close()});$('closeConnectDialog').onclick=()=>$('connectDialog').close();$('connectDialog').addEventListener('click',e=>{if(e.target===$('connectDialog'))$('connectDialog').close()});try{$('edenNickname').value=localStorage.getItem('edenNickname')||''}catch(e){}try{$('edenPs5Ip').value=localStorage.getItem('edenPs5Ip')||'192.168.7.99'}catch(e){$('edenPs5Ip').value='192.168.7.99'}
+let bridgePopup;
 $('sendLanPreview').onclick = () => {
   const ip = $('dialogIp').textContent.trim();
   const port = $('dialogPort').textContent.trim();
@@ -311,31 +312,44 @@ $('sendLanPreview').onclick = () => {
   const room = {host: ip, port: String(Number(port)), nick};
   const bridge = new URL('http://' + octets.join('.') + ':24879/v1/prepare');
   bridge.search = new URLSearchParams(room);
-  const target = 'eden-bridge-' + crypto.randomUUID();
-  const popup = window.open('', target, 'popup');
-  if (!popup) {
-    try { sessionStorage.setItem('edenReturnRoom', ip + ':' + port); } catch (e) {}
-    $('connectDialog').close();
-    window.location.assign(bridge.href);
+  if (bridgePopup && !bridgePopup.closed) {
+    bridgePopup.focus();
     return;
   }
+  const target = 'eden-bridge-' + crypto.randomUUID();
+  const popup = window.open('', target, 'popup');
+  bridgePopup = popup;
 
-  function authorize(event) {
-    if (event.source !== popup || event.origin !== bridge.origin ||
-        event.data?.type !== 'eden-bridge:ready') return;
-    window.removeEventListener('message', authorize);
-    clearTimeout(timeout);
-    popup.postMessage({type: 'eden-bridge:send-room', ...room}, bridge.origin);
+  function bridgeMessage(event) {
+    if (event.source !== popup || event.origin !== bridge.origin) return;
+    const data = event.data;
+    if (data?.type === 'eden-bridge:ready') {
+      popup.postMessage({type: 'eden-bridge:send-room', ...room}, bridge.origin);
+    } else if (data?.type === 'eden-bridge:saved' &&
+               data.host === room.host && data.port === room.port && data.nick === room.nick) {
+      popup.close();
+      stopListening();
+    }
   }
-  const timeout = setTimeout(() => window.removeEventListener('message', authorize), 15000);
-  window.addEventListener('message', authorize);
-  // Send only the sender's origin for this navigation, including HTTPS to LAN HTTP.
+  function stopListening() {
+    window.removeEventListener('message', bridgeMessage);
+    clearTimeout(timeout);
+  }
+  const timeout = popup ? setTimeout(stopListening, 60000) : null;
+  if (popup) {
+    window.addEventListener('message', bridgeMessage);
+  } else {
+    try { sessionStorage.setItem('edenReturnRoom', ip + ':' + port); } catch (e) {}
+  }
+
   const link = document.createElement('a');
   link.href = bridge.href;
-  link.target = target;
-  link.rel = 'opener';
+  link.target = popup ? target : '_self';
+  if (popup) link.rel = 'opener';
   link.referrerPolicy = 'origin';
+  document.body.append(link);
   link.click();
+  link.remove();
   $('connectDialog').close();
 };
 const filterDrawer=$('filterDrawer'),filterBackdrop=$('filterBackdrop');function toggleMobileFilters(open){filterDrawer.classList.toggle('is-open',open);filterBackdrop.hidden=!open;$('openFilters').setAttribute('aria-expanded',String(open));document.body.classList.toggle('filters-open',open);if(open)$('closeFilters').focus();else $('openFilters').focus()}$('openFilters').onclick=()=>toggleMobileFilters(true);$('closeFilters').onclick=()=>toggleMobileFilters(false);filterBackdrop.onclick=()=>toggleMobileFilters(false);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});let touchStartX=null;filterDrawer.addEventListener('touchstart',e=>{touchStartX=e.touches[0].clientX},{passive:true});filterDrawer.addEventListener('touchend',e=>{if(touchStartX!==null&&touchStartX-e.changedTouches[0].clientX>65)toggleMobileFilters(false);touchStartX=null},{passive:true});window.matchMedia('(min-width:681px)').addEventListener('change',e=>{if(e.matches&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});
