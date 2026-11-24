@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish to Cloudflare Preview after local tests
+        description: Publish to the configured ENet destination after local tests
         type: boolean
         default: false
       cloudflare_slot:
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      preview_artifact_id: ${{ steps.upload-client.outputs.artifact-id }}
+      collector_artifact_id: ${{ steps.upload-client.outputs.artifact-id }}
     defaults:
       run:
         shell: bash
@@ -65,8 +65,10 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           inputs.publish == true &&
           github.ref == 'refs/heads/main' &&
-          vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
-          (inputs.cloudflare_slot == '' || vars.EDEN_ENET_CRON_SOURCE == 'cloudflare')
+          github.run_attempt == '1' &&
+          ((inputs.cloudflare_slot == '' && vars.EDEN_ENET_PREVIEW_PUBLISH == 'true') ||
+            (inputs.cloudflare_slot != '' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare' &&
+             (vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' || vars.EDEN_ENET_PRODUCTION_PUBLISH == 'true')))
         id: archive-client
         run: |
           cd work/enet-actions
@@ -86,16 +88,18 @@ jobs:
     needs: versions
     if: >-
       needs.versions.result == 'success' &&
-      needs.versions.outputs.preview_artifact_id != '' &&
+      needs.versions.outputs.collector_artifact_id != '' &&
       github.ref == 'refs/heads/main' &&
       vars.EDEN_ENET_PREVIEW_PUBLISH == 'true' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.publish == true &&
-      (inputs.cloudflare_slot == '' ||
-        (github.run_attempt == '1' && vars.EDEN_ENET_CRON_SOURCE == 'cloudflare'))
+      github.run_attempt == '1' &&
+      (inputs.cloudflare_slot == '' || vars.EDEN_ENET_CRON_SOURCE == 'cloudflare')
+    outputs:
+      observations_artifact_id: ${{ steps.upload-observations.outputs.artifact-id }}
     environment: enet-preview
     concurrency:
-      group: enet-versions-preview
+      group: enet-versions-preview-publication
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -103,14 +107,91 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
       - uses: actions/download-artifact@v7
         with:
-          artifact-ids: ${{ needs.versions.outputs.preview_artifact_id }}
+          artifact-ids: ${{ needs.versions.outputs.collector_artifact_id }}
       - name: Publish public room versions to Cloudflare Preview
         env:
           ENET_PREVIEW_API_KEY: ${{ secrets.ENET_PREVIEW_API_KEY }}
+          EDEN_ENET_PREVIEW_EXCLUDED_NICKNAME: ${{ vars.EDEN_ENET_PREVIEW_EXCLUDED_NICKNAME }}
+          SHARE_OBSERVATIONS: ${{ inputs.cloudflare_slot != '' && vars.EDEN_ENET_PRODUCTION_PUBLISH == 'true' }}
         run: |
           tar -xf collector.tar
+          handoff=()
+          if [[ "$SHARE_OBSERVATIONS" == true ]]; then
+            handoff=(--export-observations "$RUNNER_TEMP/enet-observations.json")
+          fi
           timeout 210s python3 -u backend/enet/collector.py \
             --base-url 'https://test-enet-versions-sralcer.eden-rooms.pages.dev' \
-            --client ./eden-collector --scheduled
+            --client ./eden-collector --scheduled "${handoff[@]}"
+
+      - name: Upload public observations
+        id: upload-observations
+        if: >-
+          !cancelled() && inputs.cloudflare_slot != '' &&
+          github.run_attempt == '1' && vars.EDEN_ENET_PRODUCTION_PUBLISH == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: enet-observations-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/enet-observations.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-production:
+    needs: [versions, publish-preview]
+    if: >-
+      !cancelled() &&
+      needs.versions.result == 'success' &&
+      needs.versions.outputs.collector_artifact_id != '' &&
+      github.ref == 'refs/heads/main' &&
+      vars.EDEN_ENET_PRODUCTION_PUBLISH == 'true' &&
+      vars.EDEN_ENET_CRON_SOURCE == 'cloudflare' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish == true &&
+      inputs.cloudflare_slot != '' &&
+      github.run_attempt == '1' &&
+      (vars.EDEN_ENET_PREVIEW_PUBLISH != 'true' ||
+       needs.publish-preview.outputs.observations_artifact_id != '')
+    environment: enet-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Download public observations
+        if: vars.EDEN_ENET_PREVIEW_PUBLISH == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.publish-preview.outputs.observations_artifact_id }}
+          path: ${{ runner.temp }}/enet-handoff
+
+      - name: Download tested ENet client for production-only collection
+        if: vars.EDEN_ENET_PREVIEW_PUBLISH != 'true'
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.versions.outputs.collector_artifact_id }}
+
+      - name: Publish public room versions to production
+        env:
+          ENET_PRODUCTION_API_KEY: ${{ secrets.ENET_PRODUCTION_API_KEY }}
+          ENET_SLOT: ${{ inputs.cloudflare_slot }}
+          PREVIEW_PUBLISH: ${{ vars.EDEN_ENET_PREVIEW_PUBLISH }}
+        run: |
+          if [[ "$PREVIEW_PUBLISH" == true ]]; then
+            source=(--replay-observations "$RUNNER_TEMP/enet-handoff/enet-observations.json")
+          else
+            tar -xf collector.tar
+            source=(--client ./eden-collector)
+          fi
+          timeout 210s python3 -u backend/enet/collector.py \
+            --base-url 'https://eden-rooms.pages.dev' \
+            --scheduled --slot "$ENET_SLOT" "${source[@]}"

@@ -1,5 +1,7 @@
 # Cron de ENet versions en Cloudflare Workers
 
+Para promover el destino a producción, seguir el [plan de despliegue y rollback](../DESPLIEGUE-PRODUCCION.md). Las instrucciones de esta página describen el corte original de GitHub cron a Cloudflare para Preview.
+
 El Worker `eden-rooms-enet-cron` despacha el workflow existente `enet-versions.yml`
 cada cinco minutos UTC. GitHub aloja el runner `ubuntu-24.04` que compila y ejecuta
 las pruebas y, al habilitar la publicación, ejecuta el recolector de Preview con
@@ -25,7 +27,7 @@ SQLite propio de un Durable Object para reservar el turno.
 - **GitHub Actions** cuesta USD 0 en el repositorio público con runners estándar.
   Si pasara a privado, 8.640 turnos en 30 días superarían los 2.000 minutos de
   GitHub Free incluso con un solo job por turno, al redondear cada job hacia el
-  siguiente minuto. El flujo que publica usa dos jobs y un artefacto de un día.
+  siguiente minuto. Con ambos destinos activos, el flujo usa tres jobs y dos artefactos de un día.
   [Facturación](https://docs.github.com/en/actions/concepts/billing-and-usage)
   · [Redondeo y tarifas](https://docs.github.com/en/billing/reference/actions-runner-pricing)
 

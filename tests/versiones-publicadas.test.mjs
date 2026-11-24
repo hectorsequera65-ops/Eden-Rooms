@@ -14,7 +14,7 @@ test('public Preview endpoint reads only published versions for an eligible room
     prepare(sql) {
       reads.push(sql);
       assert.match(sql, /^SELECT /);
-      return {bind: id => ({first: () => db.prepare(sql).get(id)})};
+      return {first: () => db.prepare(sql).get(), bind: id => ({first: () => db.prepare(sql).get(id)})};
     }
   }};
   const room = {address:'8.8.8.8', port:20668, hasPassword:false};
@@ -56,14 +56,14 @@ test('public Preview endpoint reads only published versions for an eligible room
     lobby = ineligible;
     assert.deepEqual(await (await read()).json(), unavailable);
   }
-  assert.equal(reads.length, countBefore);
+  assert.equal(reads.length, countBefore + 3);
   lobby = [room];
   for (const players of [[], [{...player,version:''}]]) {
     store.run(id, JSON.stringify(players), timestamp);
     assert.deepEqual(await (await read()).json(), unavailable);
   }
   store.run(id, JSON.stringify([player]), new Date(Date.now() - 86401000).toISOString());
-  assert.deepEqual(await (await read()).json(), unavailable);
+  assert.equal((await (await read()).json()).disponible, true);
   store.run(id, 'invalid JSON', timestamp);
   const failure = await read();
   assert.equal(failure.status, 503);

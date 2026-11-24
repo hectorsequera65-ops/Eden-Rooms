@@ -1,7 +1,18 @@
-// Lista publica de salas aprobadas manualmente. No permite cambios desde la web.
+// Salas aprobadas manualmente. Clave de lectura opcional para el recolector.
 // Solo publica IP:puerto cuando fueron registrados por el administrador en D1.
-export async function onRequestGet({ env }) {
+export async function onRequestGet({ request, env }) {
   const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+  if (env.AUTORIZACIONES_API_KEY) {
+    const received = new TextEncoder().encode(request?.headers.get('X-Collector-Key') || '');
+    const expected = new TextEncoder().encode(env.AUTORIZACIONES_API_KEY);
+    let mismatch = received.length ^ expected.length;
+    for (let i = 0; i < Math.max(received.length, expected.length); i++) {
+      mismatch |= (received[i] || 0) ^ (expected[i] || 0);
+    }
+    if (!received.length || mismatch !== 0) {
+      return Response.json({ error: 'Recolector no autorizado' }, { status: 401, headers });
+    }
+  }
   if (!env.DB) return Response.json({ error: 'Base de datos no configurada' }, { status: 503, headers });
   try {
     const { results } = await env.DB.prepare(

@@ -1,0 +1,10 @@
+{
+  "rooms": [{
+    "address": "69.24.117.72", "port": 20668, "name": "Smash fixture",
+    "maxPlayers": 128, "versionsRoomId": "sala-prueba-20668",
+    "players": [
+      {"avatarUrl":"","gameId":72174692027785216,"gameName":"Super Smash Bros. Ultimate","nickname":"PlayerA","username":""},
+      {"avatarUrl":"","gameId":72174692027785216,"gameName":"Super Smash Bros. Ultimate","nickname":"PlayerB","username":""}
+    ]
+  }]
+}

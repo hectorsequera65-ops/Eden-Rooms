@@ -2,11 +2,13 @@
 """Ubuntu ENet collector. Sending requires --send; otherwise prints snapshots."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import ipaddress
 from itertools import cycle
 from datetime import datetime, timezone
 import json
 from html import unescape
+from pathlib import Path
 import os
 import re
 import subprocess
@@ -21,9 +23,16 @@ from protocol import parse_packet3
 
 PREVIEW_URL = 'https://test-enet-versions-sralcer.eden-rooms.pages.dev'
 PREVIEW_KEY = 'ENET_PREVIEW_API_KEY'
-SECRET_ENV = (PREVIEW_KEY, 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY')
+PRODUCTION_URL = 'https://eden-rooms.pages.dev'
+PRODUCTION_KEY = 'ENET_PRODUCTION_API_KEY'
+SCHEDULED_TARGETS = {
+    PREVIEW_URL: (PREVIEW_KEY, 'X-ENet-Preview-Key', 'ENET_PREVIEW_DB'),
+    PRODUCTION_URL: (PRODUCTION_KEY, 'X-ENet-Production-Key', 'DB'),
+}
+SECRET_ENV = (PREVIEW_KEY, PRODUCTION_KEY, 'VERSIONES_API_KEY', 'AUTORIZACIONES_API_KEY', 'COLLECTOR_API_KEY')
 VALIDATE_PATH = '/api/versiones-validar'
 SCHEDULED_PATH = '/api/versiones-programadas'
+DEFAULT_EXCLUDED_NICKNAME = "sralcer"
 COLLECTOR_NICKNAMES = (
     'stunning', 'smelly', 'ample', 'hideous', 'crazy', 'strong',
     'grubby', 'moist', 'scrummy', 'spiffing', 'greasy', 'amazing',
@@ -69,13 +78,14 @@ def api(base, path, payload=None, timeout=15):
         key = os.environ.get('AUTORIZACIONES_API_KEY')
         if key:
             headers['X-Collector-Key'] = key
-    preview_auth = path == SCHEDULED_PATH or (
-        PREVIEW_KEY in os.environ and path == VALIDATE_PATH and body is None
-    )
-    if preview_auth:
-        if base != PREVIEW_URL or not os.environ.get(PREVIEW_KEY):
-            raise ApiError(f'{PREVIEW_KEY} requires the canonical Preview URL and a configured key')
-        headers['X-ENet-Preview-Key'] = os.environ[PREVIEW_KEY]
+    scheduled_auth = path in (SCHEDULED_PATH, SCHEDULED_PATH + '?reserve')
+    preview_auth = PREVIEW_KEY in os.environ and path == VALIDATE_PATH and body is None
+    if scheduled_auth or preview_auth:
+        target = SCHEDULED_TARGETS.get(base) if scheduled_auth or base == PREVIEW_URL else None
+        if target is None or not os.environ.get(target[0]):
+            raise ApiError('Scheduled or Preview authentication requires the canonical URL and its configured key')
+        key, header, _ = target
+        headers[header] = os.environ[key]
     elif body is None and path == VALIDATE_PATH:
         key = os.environ.get('VERSIONES_API_KEY')
         if key:
@@ -86,7 +96,7 @@ def api(base, path, payload=None, timeout=15):
             headers['Content-Type'] = 'application/json'
     elif body is not None:
         headers['Content-Type'] = 'application/json'
-        if not preview_auth:
+        if not (preview_auth or scheduled_auth):
             headers['X-API-Key'] = os.environ['VERSIONES_API_KEY']
     req = urllib.request.Request(base + path, data=body, headers=headers)
     opener = urllib.request.build_opener(NoRedirect())
@@ -97,6 +107,9 @@ def api(base, path, payload=None, timeout=15):
             except (ValueError, UnicodeError) as error:
                 raise ApiError(f'{method} {path}: HTTP {response.status}, invalid JSON response (possibly a missing API endpoint or static HTML fallback)') from error
     except HTTPError as error:
+        if scheduled_auth:
+            error.close()
+            raise ApiError(f'{method} {path}: HTTP {error.code}') from None
         try:
             raw = error.read(8192).decode('utf-8', errors='replace')
         except (OSError, ValueError):
@@ -113,8 +126,12 @@ def api(base, path, payload=None, timeout=15):
             diagnostic += '; redirect refused: use the canonical HTTPS base URL'
         raise ApiError(diagnostic) from None
     except URLError as error:
+        if scheduled_auth:
+            raise ApiError(f'{method} {path}: network/TLS error') from None
         raise ApiError(f'{method} {path}: network/TLS error: {safe_detail(error.reason)}') from None
     except (TimeoutError, OSError) as error:
+        if scheduled_auth:
+            raise ApiError(f'{method} {path}: network error') from None
         raise ApiError(f'{method} {path}: network error: {safe_detail(error)}') from None
 
 
@@ -250,14 +267,14 @@ def validate_target(address, port, networks):
     return str(ip), port
 
 
-def collect_public_rooms(base, binary):
+def scheduled_rooms(base):
     data = api(base, SCHEDULED_PATH, timeout=6)
     if not isinstance(data, dict) or not isinstance(data.get('salas'), list):
         raise ApiError('Invalid scheduled room list')
 
-    if data.get('storage') != 'ENET_PREVIEW_DB':
-        raise ApiError('Scheduled API did not confirm the ENET_PREVIEW_DB contract')
-
+    expected_storage = SCHEDULED_TARGETS[base][2]
+    if data.get('storage') != expected_storage:
+        raise ApiError(f'Scheduled API did not confirm the {expected_storage} contract')
     rooms = {}
     for room in data['salas']:
         if not isinstance(room, dict) or room.get('hasPassword') is not False:
@@ -270,29 +287,133 @@ def collect_public_rooms(base, binary):
         if room.get('id') == room_id:
             rooms[room_id] = room
 
-    def sample_and_publish(room, nickname):
-        def publish(snapshot):
-            result = api(base, SCHEDULED_PATH, snapshot, timeout=6)
-            if not isinstance(result, dict) or result.get('ok') is not True:
-                raise ApiError('Scheduled snapshot storage not acknowledged')
+    return rooms
+
+
+def reserve_production(slot):
+    reservation = api(PRODUCTION_URL, SCHEDULED_PATH + '?reserve', {'slot': slot}, timeout=6)
+    if not isinstance(reservation, dict) or reservation.get('reserved') is not True:
+        raise ApiError('Production slot reservation not acknowledged')
+
+
+def publish_scheduled(base, snapshot, slot):
+    if base == PRODUCTION_URL:
+        snapshot = {**snapshot, 'slot': slot}
+    result = api(base, SCHEDULED_PATH, snapshot, timeout=6)
+    if not isinstance(result, dict) or result.get('ok') is not True:
+        raise ApiError('Scheduled snapshot storage not acknowledged')
+
+
+VERSION_MODULE_ROOT = Path(__file__).resolve().parents[2]
+CHECK_PUBLIC_VERSIONS = """
+import { readFileSync } from 'node:fs';
+import { knownVersion } from './assets/player-versions.js';
+const rooms = JSON.parse(readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(rooms.map(versions => versions.some(knownVersion))));
+"""
+
+
+def public_observations(snapshots, excluded_nickname=DEFAULT_EXCLUDED_NICKNAME):
+    players_by_room = [
+        [
+            {key: player[key] for key in ('nombre', 'juego', 'version', 'virtual_ip', 'title_id') if key in player}
+            for player in snapshot['jugadores']
+            if player.get('nombre') and player['nombre'] not in ('EdenRoomsConsulta', DEFAULT_EXCLUDED_NICKNAME, excluded_nickname)
+        ]
+        for snapshot in snapshots
+    ]
+    if not any(players_by_room):
+        return []
+    versions_by_room = [[player.get('version') for player in players] for players in players_by_room]
+    # Use the same predicate as the site, including the JavaScript engine's Unicode data.
+    try:
+        result = subprocess.run(
+            ['node', '--input-type=module', '-e', CHECK_PUBLIC_VERSIONS],
+            cwd=VERSION_MODULE_ROOT, env={'PATH': os.environ.get('PATH', os.defpath)},
+            input=json.dumps(versions_by_room), text=True, capture_output=True, check=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise ApiError('Could not verify public observation versions with Node.js') from None
+    return [
+        dict(sala_id=snapshot['sala_id'], consultado_en=snapshot['consultado_en'], jugadores=players)
+        for snapshot, players, known in zip(snapshots, players_by_room, json.loads(result.stdout), strict=True)
+        if known
+    ]
+
+
+def public_observation(snapshot, excluded_nickname=DEFAULT_EXCLUDED_NICKNAME):
+    return next(iter(public_observations([snapshot], excluded_nickname)), None)
+
+
+def replay_public_observations(filename, slot):
+    with open(filename, encoding='utf-8') as source:
+        snapshots = json.load(source)
+    rooms = scheduled_rooms(PRODUCTION_URL)
+    reserve_production(slot)
+
+    def publish(snapshot):
         try:
-            collect(binary, room, 5, publish, nickname,
-                    hard_timeout=7, first_snapshot=True)
+            publish_scheduled(PRODUCTION_URL, snapshot, slot)
+            return True
+        except ApiError as error:
+            print(f'Production publication failed: {safe_detail(error)}', file=sys.stderr)
+            return False
+
+    observations = public_observations([snapshot for snapshot in snapshots if snapshot['sala_id'] in rooms])
+    eligible = {observation['sala_id']: observation for observation in observations}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(publish, sorted(eligible.values(), key=lambda sample: sample['consultado_en'])))
+    print(f'Published: {sum(results)}/{len(eligible)}', flush=True)
+    return int(not all(results))
+
+
+def collect_public_rooms(base, binary, slot=None, export=None, *, excluded_nickname=DEFAULT_EXCLUDED_NICKNAME):
+    rooms = scheduled_rooms(base)
+    if base == PRODUCTION_URL:
+        reserve_production(slot)
+
+    def publish(snapshot):
+        try:
+            publish_scheduled(base, snapshot, slot)
             return 'published'
+        except ApiError as error:
+            print(f"Publication failed for {snapshot['sala_id']}: {safe_detail(error)}", file=sys.stderr)
+            return 'publication_error'
+
+    def sample(room, nickname):
+        snapshots = []
+        try:
+            collect(binary, room, 5, snapshots.append, nickname,
+                    hard_timeout=7, first_snapshot=True)
+            return snapshots[0] if snapshots else 'unavailable'
         except RoomUnavailable as error:
             print(f"Room unavailable {room['id']}: {safe_detail(error)}", file=sys.stderr)
             return 'unavailable'
-        except ApiError as error:
-            print(f"Publication failed for {room['id']}: {safe_detail(error)}", file=sys.stderr)
-            return 'publication_error'
         except (ClientError, OSError) as error:
             print(f"ENet client error for {room['id']}: {safe_detail(error)}", file=sys.stderr)
             return 'client_error'
 
+    pipeline = export is not None or base == PRODUCTION_URL
+    workers = 8 if pipeline else 2
+
+    def sample_and_queue(room, nickname):
+        snapshot = sample(room, nickname)
+        if isinstance(snapshot, str):
+            return snapshot, None
+        status = publication.submit(publish, snapshot) if publication is not None else publish(snapshot)
+        return status, snapshot if export is not None else None
+
     print(f'Eligible rooms: {len(rooms)}', flush=True)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        # The submitting thread assigns names in room order, before workers can race.
-        outcomes = list(pool.map(sample_and_publish, rooms.values(), cycle(COLLECTOR_NICKNAMES)))
+    with (ThreadPoolExecutor(max_workers=workers) if pipeline else nullcontext()) as publication:
+        with ThreadPoolExecutor(max_workers=workers) as sampling:
+            # Assign names in room order and free each ENet worker before waiting for HTTP.
+            results = list(sampling.map(sample_and_queue, rooms.values(), cycle(COLLECTOR_NICKNAMES)))
+        if export is not None:
+            observations = public_observations([snapshot for _, snapshot in results if snapshot is not None],
+                                               excluded_nickname)
+            with open(export, 'x', encoding='utf-8') as destination:
+                json.dump(observations, destination)
+        outcomes = [status if isinstance(status, str) else status.result() for status, _ in results]
     published = outcomes.count('published')
     publication_errors = outcomes.count('publication_error')
     client_errors = outcomes.count('client_error')
@@ -315,6 +436,10 @@ def main():
     send_mode.add_argument('--send', action='store_true')
     send_mode.add_argument('--scheduled', action='store_true', help='Sample and publish the public lobby once')
     send_mode.add_argument('--validate-send', action='store_true', help='POST snapshots to validation-only route, without D1 writes')
+    handoff = parser.add_mutually_exclusive_group()
+    handoff.add_argument('--export-observations', help='Save public observations for the production job')
+    handoff.add_argument('--replay-observations', help='Publish public observations without connecting to ENet')
+    parser.add_argument('--slot', type=int, help='UTC epoch milliseconds for a production scheduled run')
     parser.add_argument('--room-id', help='Query only this exact registered room ID')
     parser.add_argument('--nickname', default=os.environ.get('EDEN_ENET_NICKNAME'),
                         help='Use a fixed nickname for manual collection instead of rotating')
@@ -333,16 +458,34 @@ def main():
         parser.error('Invalid duration/interval')
     if args.scheduled and args.room_id is not None:
         parser.error('--scheduled always processes the public lobby')
-    if args.scheduled and base != PREVIEW_URL:
-        parser.error('--scheduled requires the canonical Preview URL')
-    key_name = PREVIEW_KEY if args.scheduled or (args.check_auth and PREVIEW_KEY in os.environ) else 'VERSIONES_API_KEY'
+    if args.scheduled and base not in SCHEDULED_TARGETS:
+        parser.error('--scheduled requires a canonical Preview or production URL')
+    production_schedule = args.scheduled and base == PRODUCTION_URL
+    if args.export_observations and not (args.scheduled and base == PREVIEW_URL):
+        parser.error('--export-observations requires scheduled Preview collection')
+    excluded_nickname = os.environ.get('EDEN_ENET_PREVIEW_EXCLUDED_NICKNAME') or DEFAULT_EXCLUDED_NICKNAME
+    if args.replay_observations and not production_schedule:
+        parser.error('--replay-observations requires scheduled production publication')
+    if production_schedule and (not args.slot or args.slot < 0 or args.slot % 300000):
+        parser.error('Production collection requires a valid five-minute --slot')
+    if args.slot is not None and not production_schedule:
+        parser.error('--slot is only used for production collection')
+    key_name = SCHEDULED_TARGETS[base][0] if args.scheduled else (
+        PREVIEW_KEY if args.check_auth and PREVIEW_KEY in os.environ else 'VERSIONES_API_KEY'
+    )
     if (args.send or args.validate_send or args.check_auth or args.scheduled) and not os.environ.get(key_name):
         parser.error(f'{key_name} is required for publishing or checking versions')
     if args.scheduled:
         try:
-            return collect_public_rooms(base, args.client)
+            if args.replay_observations:
+                return replay_public_observations(args.replay_observations, args.slot)
+            return collect_public_rooms(base, args.client, args.slot, args.export_observations,
+                                        excluded_nickname=excluded_nickname)
         except ApiError as error:
             print(safe_detail(error), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, TypeError, KeyError):
+            print('Invalid or inaccessible scheduled observations', file=sys.stderr)
             return 1
     publisher = SnapshotPublisher(base, validate_only=args.validate_send)
     nicknames = cycle(COLLECTOR_NICKNAMES)
