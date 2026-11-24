@@ -134,9 +134,9 @@ body{background:radial-gradient(ellipse 900px 400px at 50% -200px,#275b9344,tran
 #chatPanel.chat-entered #chatEntry{display:none!important}
 </style></head><body><main class="wrap">
 <header class="hero"><div class="brand"><div class="logo" aria-label="Logo de ProsperoEden"><img alt="ProsperoEden" src="data:image/webp;base64,UklGRuIDAABXRUJQVlA4INYDAABwEwCdASpgAGAAPqFInkomJCKhplbcqMAUCWgA0xyq1tu5+6nKPVlt7vMr+0HrOaZtvO1okGVo7y4uNk1/46dq3y1vdJBdyvAp5i0vpPHqGRCQHhWZ5lcXdqJmfIsxPpCo8rhLbrGy2xHCaKjkd48yL26cm3N5IKpDR0IEHwBOQ5ZRY/y2tK822D5UGW+WPO01+7ptrcdTWcBu2vi5MvLf3z7jgAD++fpD2oO1Rqc56Kq0/u6jxC/J1Sbaxhl/j46nNB3SkxdNYc3MoUT6L47CJUJqwf5c8y5F9ExCmzpuglzwcT2bLYcT0uG5gQaXMwHU7kfUwR8afTP7n/F8BJDpwDXc9cLrDAVpo7Mv+Ehuc8xwr3zppEjgvN+xMUqv3JkzifNqIBG/T930Ff04QGeu1BOPf5h3O/yPZv6RGHBPFWml60zO0DU1rZyyyVOY3k4Ql10YQ4Sp6E1Xq+o0TT931FUqIN7Wyse943KmmFzfTjOBtN1fdgGNDP6sQaCxBc7MVOLyYRsGGxVi59ZL7RdR4Tar8KdY7G3K0kpjhO87HMUOEEg5NVJ+GrcLUojxPumP0VS4K6RJHVEFmLWNrMb3hUulffQpB/ok+xnMcWQnISX6YtH18cSduDbNJf2AInaNgWfdZ8bJTlgoL0hwO2kn6P96y+wW+bBUbu/u/qG6PGUomDE/Mu4G8BKbllHDhq7tZRpNSVEEcBlVdg1UZNkeZ7XPNTGwlRJ8N341jnlWIKcJVVp6Tt9an4R5KSLLll8aw7DSnaLezuBo5LH2ZmWAZzTMwKqXCV4Mi7lVnG33c8eJk3IaUa99/QtJsDU1j5i9DHc1Q5V74gaH8i2Azkj7Ilyp2hf0pI5FZPuRs0k1k20BU79GYWCluDWi5x8XxOCR3SMnr4B+kvfh+ipXCAowYc5QN+ZIWBk99+xS/yTfQy8HIcZjeJZu3paBP5N8N1lGcKtPrOhqtdctAjOyUlR8Jd+iRxlGBzW0bUCa93566aVQeF3s3ZTqFhAkaxwcyLCG3sr2vpuIwOmiXtMXusQvzhc8sKjPTS0ot2TL9HpmpnMYMcGWg71GMZ0iBRidpjFf9zUU0FtJ6qKUgupDRc9jDTD4zZwarT22potTAt6MI/GTu8UPXPb5iUJSJh2hG7X/QHPTi4Tvrh3MJMul+Fu6bpbcioyS7+YyY7zJFxkpe0gG6ELAnk5NoncuuihD7toZ2G2omH2zfncdlHyJreZBaWS9sABJDpzx1Nzn3/sZPTOrUSDEmLTAkBZI5TzMjz+Txe106JCoze86ZMcTAKhT57AVUAAA" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div><div><h1>Eden Rooms</h1><p class="subtitle">Multijugador de Nintendo Switch en PS5 y PC</p><p class="hero-explainer">Explorá salas compatibles para jugar desde ProsperoEden en PS5 o Eden en PC. Encontrá jugadores y conectate mediante conexión directa.</p></div></div><div class="actions"><button class="btn" id="theme" aria-label="Cambiar tema">☀️ Tema</button></div></header>
-<dialog id="descriptionDialog" class="connect-dialog" aria-labelledby="descriptionTitle"><h2 id="descriptionTitle">Descripción de la sala</h2><p id="descriptionRoomName" class="muted tiny"></p><div id="descriptionText" class="description-dialog-text"></div><div class="dialog-actions"><button id="closeDescriptionDialog" type="button">Cerrar</button></div></dialog><dialog id="connectDialog" class="connect-dialog" aria-labelledby="connectTitle"><h2 id="connectTitle">Conectar PS5 · ProsperoEden</h2><p>Para entrar a esta sala desde tu PS5:</p><ol><li>Abrí <strong>ProsperoEden</strong>.</li><li>Entrá en <strong>Multijugador</strong> y elegí <strong>Conexión directa</strong>.</li><li>Ingresá la IP y el puerto de esta sala.</li><li>Confirmá para intentar conectarte.</li></ol><p class="endpoint-line"><strong>IP:</strong> <span id="dialogIp"></span></p><p class="endpoint-line"><strong>Puerto:</strong> <span id="dialogPort"></span></p><p id="dialogPasswordWarning" class="password-warning" hidden>🔒 <strong>Esta sala tiene contraseña.</strong> Necesitás conocerla e ingresarla en ProsperoEden para poder conectarte. Eden Rooms no muestra ni proporciona esa contraseña.</p><p class="tiny muted">La conexión requiere una sala accesible y juegos y configuraciones compatibles. Jugadores de Eden en PC también pueden participar en salas compatibles.</p><details class="bridge-options"><summary>🎮 Enviar sala a PS5 con Eden Bridge <span class="bridge-chevron">▾</span></summary><div class="bridge-options-content"><p><label for="edenNickname"><strong>Tu apodo multijugador:</strong></label> <input id="edenNickname" maxlength="24" pattern="[A-Za-z0-9_-]{1,24}" placeholder="Skifrayer" autocomplete="nickname" style="width:100%;max-width:300px;padding:9px;border-radius:7px"></p><p><label for="edenPs5Ip"><strong>IP local de tu PS5 (Eden Bridge):</strong></label><input id="edenPs5Ip" type="text" inputmode="decimal" maxlength="15" placeholder="192.168.7.99" autocomplete="off" spellcheck="false" style="display:block;width:100%;max-width:300px;padding:9px;margin-top:6px;border-radius:7px"><small class="muted">Solo la IP de la PS5, sin puerto. Se guarda en este navegador.</small></p><p class="tiny muted">Eden Bridge enviará la IP, el puerto y tu apodo a ProsperoEden.</p><button id="sendLanPreview" type="button">Enviar a PS5</button></div></details><div class="dialog-actions"><button id="closeConnectDialog" type="button">Cerrar</button></div></dialog><section id="publicPanel"><div class="mobile-filter-bar"><input id="mobileSearch" aria-label="Buscar salas en móvil" placeholder="🔎 Buscar sala, juego o jugador…"><button class="btn" id="openFilters" type="button" aria-controls="filterDrawer" aria-expanded="false">☰ Filtros</button></div><div id="filterBackdrop" class="filter-backdrop" hidden></div><div id="filterDrawer" class="filter-drawer"><div class="filter-drawer-head"><strong>Filtros de salas</strong><button class="btn" id="closeFilters" type="button" aria-label="Cerrar filtros">✕</button></div><div class="toolbar"><input id="search" aria-label="Buscar salas" placeholder="🔎 Buscar sala, juego o jugador…"><select id="filter" aria-label="Filtrar salas"><option value="all">Todas las salas</option><option value="open">Sin contraseña</option><option value="occupied">Con jugadores</option><option value="available">Con espacio libre</option></select><select id="playerGameFilter" aria-label="Filtrar por juego de los jugadores"><option value="all">Cualquier juego en ejecución</option></select><select id="gameFilter" aria-label="Filtrar por juego"><option value="all">Todos los juegos</option></select><select id="regionFilter" aria-label="Filtrar por región"><option value="all">Todas las regiones</option><option value="latam">Latinoamérica (por IP)</option></select><input id="portFilter" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="5" aria-label="Filtrar por puerto UDP" placeholder="Puerto UDP (ej. 24872)" title="Mostrar salas con este puerto UDP"><select id="sort" aria-label="Ordenar salas"><option value="players">Más jugadores primero</option><option value="name">Nombre A-Z</option><option value="capacity">Mayor capacidad</option><option value="favorites">Favoritos primero</option></select><button class="btn" id="favoritesOnly" aria-pressed="false">☆ Solo favoritos</button></div>
+<dialog id="descriptionDialog" class="connect-dialog" aria-labelledby="descriptionTitle"><h2 id="descriptionTitle">Descripción de la sala</h2><p id="descriptionRoomName" class="muted tiny"></p><div id="descriptionText" class="description-dialog-text"></div><div class="dialog-actions"><button id="closeDescriptionDialog" type="button">Cerrar</button></div></dialog><dialog id="connectDialog" class="connect-dialog" aria-labelledby="connectTitle"><h2 id="connectTitle">Conectar PS5 · ProsperoEden</h2><p>Para entrar a esta sala desde tu PS5:</p><ol><li>Abrí <strong>ProsperoEden</strong>.</li><li>Entrá en <strong>Multijugador</strong> y elegí <strong>Conexión directa</strong>.</li><li>Ingresá la IP y el puerto de esta sala.</li><li>Confirmá para intentar conectarte.</li></ol><p class="endpoint-line"><strong>IP:</strong> <span id="dialogIp"></span></p><p class="endpoint-line"><strong>Puerto:</strong> <span id="dialogPort"></span></p><p id="dialogPasswordWarning" class="password-warning" hidden>🔒 <strong>Esta sala tiene contraseña.</strong> Necesitás conocerla e ingresarla en ProsperoEden para poder conectarte. Eden Rooms no muestra ni proporciona esa contraseña.</p><p class="tiny muted">La conexión requiere una sala accesible y juegos y configuraciones compatibles. Jugadores de Eden en PC también pueden participar en salas compatibles.</p><details class="bridge-options"><summary>🎮 Enviar sala a PS5 con Eden Bridge <span class="bridge-chevron">▾</span></summary><div class="bridge-options-content"><p><label for="edenNickname"><strong>Tu apodo multijugador:</strong></label> <input id="edenNickname" maxlength="24" pattern="[A-Za-z0-9_\-]{1,24}" placeholder="Skifrayer" autocomplete="nickname" style="width:100%;max-width:300px;padding:9px;border-radius:7px"></p><p><label for="edenPs5Ip"><strong>IP local de tu PS5 (Eden Bridge):</strong></label><input id="edenPs5Ip" type="text" inputmode="decimal" maxlength="15" placeholder="192.168.7.99" autocomplete="off" spellcheck="false" style="display:block;width:100%;max-width:300px;padding:9px;margin-top:6px;border-radius:7px"><small class="muted">Solo la IP de la PS5, sin puerto. Se guarda en este navegador.</small></p><p class="tiny muted">Requiere <a href="https://github.com/hectorsequera65-ops/EdenBridge-PS5/releases/tag/v0.3.4-experimental" target="_blank" rel="noopener noreferrer">Eden Bridge v0.3.4-experimental</a> o posterior en la PS5.</p><button id="sendLanPreview" type="button">Enviar a PS5</button></div></details><div class="dialog-actions"><button id="closeConnectDialog" type="button">Cerrar</button></div></dialog><section id="publicPanel"><div class="mobile-filter-bar"><input id="mobileSearch" aria-label="Buscar salas en móvil" placeholder="🔎 Buscar sala, juego o jugador…"><button class="btn" id="openFilters" type="button" aria-controls="filterDrawer" aria-expanded="false">☰ Filtros</button></div><div id="filterBackdrop" class="filter-backdrop" hidden></div><div id="filterDrawer" class="filter-drawer"><div class="filter-drawer-head"><strong>Filtros de salas</strong><button class="btn" id="closeFilters" type="button" aria-label="Cerrar filtros">✕</button></div><div class="toolbar"><input id="search" aria-label="Buscar salas" placeholder="🔎 Buscar sala, juego o jugador…"><select id="filter" aria-label="Filtrar salas"><option value="all">Todas las salas</option><option value="open">Sin contraseña</option><option value="occupied">Con jugadores</option><option value="available">Con espacio libre</option></select><select id="playerGameFilter" aria-label="Filtrar por juego de los jugadores"><option value="all">Cualquier juego en ejecución</option></select><select id="gameFilter" aria-label="Filtrar por juego"><option value="all">Todos los juegos</option></select><select id="regionFilter" aria-label="Filtrar por región"><option value="all">Todas las regiones</option><option value="latam">Latinoamérica (por IP)</option></select><input id="portFilter" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="5" aria-label="Filtrar por puerto UDP" placeholder="Puerto UDP (ej. 24872)" title="Mostrar salas con este puerto UDP"><select id="sort" aria-label="Ordenar salas"><option value="players">Más jugadores primero</option><option value="name">Nombre A-Z</option><option value="capacity">Mayor capacidad</option><option value="favorites">Favoritos primero</option></select><button class="btn" id="favoritesOnly" aria-pressed="false">☆ Solo favoritos</button></div>
 <div class="quickbar"><span class="quick-label">FILTROS RÁPIDOS</span><button class="btn" id="quickActive" aria-pressed="false">🟢 Con jugadores</button><button class="btn" id="quickOpen" aria-pressed="false">🔓 Sin contraseña</button><button class="btn" id="quickLatam" aria-pressed="false">🌎 Latinoamérica</button><button class="btn" id="clearFilters">✕ Limpiar filtros</button></div></div><div class="stats"><div class="stat"><strong id="total">—</strong><span>Salas públicas</span></div><div class="stat"><strong id="online">—</strong><span>Jugadores conectados</span></div><div class="stat"><strong id="active">—</strong><span>Salas con jugadores</span></div></div>
-<div class="section-title"><h2>Explorar salas</h2><span class="muted tiny" id="status" role="status">Consultando salas…</span></div><div id="rooms" class="cards"></div></section>
+<p id="bridgeNotice" role="status" hidden></p><div class="section-title"><h2>Explorar salas</h2><span class="muted tiny" id="status" role="status">Consultando salas…</span></div><div id="rooms" class="cards"></div></section>
 <footer>Datos obtenidos del directorio público de salas de Eden. El listado no garantiza que cada sala sea accesible desde tu red. La ubicación por IP es aproximada y se consulta desde el servidor con proveedores externos al mostrar cada sala. Eden Rooms es un navegador comunitario independiente.</footer></main>
 <button id="chatLauncher" class="chat-launcher" type="button" aria-controls="chatPanel" aria-expanded="false">💬 Chat</button><section id="chatPanel" class="chat-panel" aria-label="Chat público de Eden Rooms" hidden><div class="chat-head"><strong>💬 Chat de Eden Rooms</strong><button id="chatClose" type="button" aria-label="Cerrar chat">✕</button></div><form id="chatEntry" class="chat-entry"><h3>Ingresar al chat</h3><p>Elegí tu apodo para ver los mensajes y comenzar a chatear.</p><input id="chatEntryNickname" maxlength="24" minlength="2" pattern="[A-Za-z0-9_-]{2,24}" placeholder="Tu apodo (2 a 24 caracteres)" aria-label="Tu apodo para ingresar al chat" autocomplete="nickname" required><button type="submit">Ingresar</button></form><div id="chatMessages" class="chat-messages" role="log" aria-live="off"><p class="muted">Abrí el chat para ver los mensajes.</p></div><form id="chatForm" class="chat-form"><input id="chatNickname" type="hidden"><div id="chatSelectedRoom" class="chat-selected-room" hidden></div><select id="chatMode" hidden aria-label="Tipo de mensaje"><option value="quick">Frases rápidas</option><option value="text">Escribir mensaje</option></select><button type="button" id="chatModeToggle" class="chat-mode-toggle" aria-label="Cambiar a escribir mensaje" title="Cambiar a escribir mensaje">✏️</button><input id="chatCustomMessage" maxlength="350" placeholder="Escribí tu mensaje…" aria-label="Mensaje personalizado" hidden><label for="chatPhrase" class="chat-select-label">Mensaje rápido</label><select id="chatPhrase" aria-label="Elegir frase para el chat" required><option value="¿Alguien quiere jugar?">¿Alguien quiere jugar?</option><option value="Estoy buscando jugadores.">Estoy buscando jugadores.</option><option value="¿Qué versión del juego tienen?">¿Qué versión del juego tienen?</option><option value="Voy a crear una sala.">Voy a crear una sala.</option><option value="Entren a mi sala.">Entren a mi sala.</option><option value="¿Cuántos jugadores faltan?">¿Cuántos jugadores faltan?</option><option value="Estoy entrando.">Estoy entrando.</option><option value="Esperen un momento.">Esperen un momento.</option><option value="¡Estoy listo!">¡Estoy listo!</option><option value="¡Gracias por jugar!">¡Gracias por jugar!</option></select><label for="chatGame" class="chat-select-label">Juego</label><select id="chatGame" aria-label="Elegir juego con modo inalámbrico local para el chat" required><option value="Cualquier juego">Cualquier juego</option><option value="Mario Kart 8 Deluxe">Mario Kart 8 Deluxe</option><option value="Super Smash Bros. Ultimate">Super Smash Bros. Ultimate</option><option value="Animal Crossing: New Horizons">Animal Crossing: New Horizons</option><option value="Splatoon 3">Splatoon 3</option><option value="Pokémon Scarlet/Violet">Pokémon Scarlet/Violet</option><option value="Super Mario 3D World + Bowser’s Fury">Super Mario 3D World + Bowser’s Fury</option><option value="Mario Party Superstars">Mario Party Superstars</option><option value="Luigi’s Mansion 3">Luigi’s Mansion 3</option><option value="Clubhouse Games: 51 Worldwide Classics">Clubhouse Games: 51 Worldwide Classics</option><option value="Overcooked! All You Can Eat">Overcooked! All You Can Eat</option><option value="MARVEL vs. CAPCOM Fighting Collection: Arcade Classics">MARVEL vs. CAPCOM Fighting Collection: Arcade Classics</option><option value="Among Us">Among Us</option></select><div id="chatPreview" class="chat-preview" aria-live="polite"></div><button id="chatSend" type="submit">Enviar</button></form><p id="chatNotice" class="chat-notice">Chat público. No compartas datos personales. Sin enlaces ni spam.</p></section><script>
 'use strict';
@@ -240,7 +240,7 @@ $('rooms').innerHTML=filtered.length?filtered.map(r=>{const p=Array.isArray(r.pl
 $('status').textContent=(checkingCountries?'🌎 Identificando países: '+(rooms.length-geoPending.size)+'/'+rooms.length+' salas · Filtro pendiente':filtered.length+' de '+rooms.length+' salas')+' · '+new Date().toLocaleTimeString();updateGeo();
 }
 async function load(){if(loading)return;loading=true;$('status').textContent='Actualizando salas…';try{const r=await fetch('/api/rooms',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const data=await r.json();if(!Array.isArray(data.rooms))throw Error('Respuesta inesperada');rooms=data.rooms;updateGameOptions();enqueueLatamGeos();render();}catch(e){$('status').textContent='Error al actualizar';if(!rooms.length)$('rooms').innerHTML='<div class="notice error">No se pudieron consultar las salas. Comprobá la API y volvé a intentar. ('+esc(e.message)+')</div>'}finally{loading=false}}
-/* Restore the room card when the user returns with the browser Back button. */
+/* Restore the room card when the user returns from the bridge. */
 function focusLastSentRoom(){
   let key='';try{key=sessionStorage.getItem('edenReturnRoom')||''}catch(e){}
   if(!key)return;
@@ -283,8 +283,42 @@ function syncDialogScrollLock(){
   dialog.showModal=function(){originalShowModal();syncDialogScrollLock();};
 });
 $('closeDescriptionDialog').onclick=()=>$('descriptionDialog').close();$('descriptionDialog').addEventListener('click',e=>{if(e.target===$('descriptionDialog'))$('descriptionDialog').close()});$('closeConnectDialog').onclick=()=>$('connectDialog').close();$('connectDialog').addEventListener('click',e=>{if(e.target===$('connectDialog'))$('connectDialog').close()});try{$('edenNickname').value=localStorage.getItem('edenNickname')||''}catch(e){}try{$('edenPs5Ip').value=localStorage.getItem('edenPs5Ip')||'192.168.7.99'}catch(e){$('edenPs5Ip').value='192.168.7.99'}
-let bridgePopup;
+const bridgeIntentKey = 'edenBridgeIntent';
+const bridgeNotice = $('bridgeNotice');
+
+function resumeBridgeTransfer() {
+  if (window.top !== window) return;
+  const match = /^#eden-bridge-(challenge|saved)=([a-f0-9]{32})\.([a-f0-9]{32})$/.exec(location.hash);
+  if (!match) return;
+  const [, phase, intent, token] = match;
+  history.replaceState(history.state, '', location.pathname + location.search);
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(bridgeIntentKey));
+    if (pending?.intent === intent && phase === 'challenge' && !pending.token &&
+        Date.now() < pending.expires) {
+      const destination = new URL('/v1/receive', pending.bridge);
+      destination.search = new URLSearchParams(pending.room);
+      destination.hash = intent + '.' + token;
+      sessionStorage.setItem(bridgeIntentKey, JSON.stringify({...pending, token}));
+      location.replace(destination.href);
+      return;
+    }
+    if (pending?.intent === intent && phase === 'saved' && pending.token === token) {
+      sessionStorage.removeItem(bridgeIntentKey);
+      sessionStorage.setItem('edenReturnRoom', pending.room.host + ':' + pending.room.port);
+      bridgeNotice.textContent = 'Sala guardada correctamente en la PS5.';
+      bridgeNotice.hidden = false;
+      return;
+    }
+  } catch {}
+  bridgeNotice.textContent = 'No se pudo verificar el envío. Volvé a iniciar el envío desde esta pestaña.';
+  bridgeNotice.hidden = false;
+}
+
+resumeBridgeTransfer();
+window.addEventListener('hashchange', resumeBridgeTransfer);
 $('sendLanPreview').onclick = () => {
+  if (window.top !== window) return;
   const ip = $('dialogIp').textContent.trim();
   const port = $('dialogPort').textContent.trim();
   const nick = $('edenNickname').value.trim();
@@ -310,47 +344,24 @@ $('sendLanPreview').onclick = () => {
   } catch (e) {}
 
   const room = {host: ip, port: String(Number(port)), nick};
-  const bridge = new URL('http://' + octets.join('.') + ':24879/v1/prepare');
-  bridge.search = new URLSearchParams(room);
-  if (bridgePopup && !bridgePopup.closed) {
-    bridgePopup.focus();
+  const bridge = new URL('http://' + octets.join('.') + ':24879/v1/transfer');
+  const intent = crypto.randomUUID().replaceAll('-', '');
+  try {
+    sessionStorage.setItem(bridgeIntentKey, JSON.stringify({
+      bridge: bridge.origin, room, intent, expires: Date.now() + 300000
+    }));
+  } catch {
+    alert('Habilitá el almacenamiento de sesión para enviar la sala a la PS5.');
     return;
   }
-  const target = 'eden-bridge-' + crypto.randomUUID();
-  const popup = window.open('', target, 'popup');
-  bridgePopup = popup;
 
-  function bridgeMessage(event) {
-    if (event.source !== popup || event.origin !== bridge.origin) return;
-    const data = event.data;
-    if (data?.type === 'eden-bridge:ready') {
-      popup.postMessage({type: 'eden-bridge:send-room', ...room}, bridge.origin);
-    } else if (data?.type === 'eden-bridge:saved' &&
-               data.host === room.host && data.port === room.port && data.nick === room.nick) {
-      popup.close();
-      stopListening();
-    }
-  }
-  function stopListening() {
-    window.removeEventListener('message', bridgeMessage);
-    clearTimeout(timeout);
-  }
-  const timeout = popup ? setTimeout(stopListening, 60000) : null;
-  if (popup) {
-    window.addEventListener('message', bridgeMessage);
-  } else {
-    try { sessionStorage.setItem('edenReturnRoom', ip + ':' + port); } catch (e) {}
-  }
-
+  bridge.search = new URLSearchParams({...room, intent});
   const link = document.createElement('a');
   link.href = bridge.href;
-  link.target = popup ? target : '_self';
-  if (popup) link.rel = 'opener';
-  link.referrerPolicy = 'origin';
+  link.referrerPolicy = 'no-referrer';
   document.body.append(link);
   link.click();
   link.remove();
-  $('connectDialog').close();
 };
 const filterDrawer=$('filterDrawer'),filterBackdrop=$('filterBackdrop');function toggleMobileFilters(open){filterDrawer.classList.toggle('is-open',open);filterBackdrop.hidden=!open;$('openFilters').setAttribute('aria-expanded',String(open));document.body.classList.toggle('filters-open',open);if(open)$('closeFilters').focus();else $('openFilters').focus()}$('openFilters').onclick=()=>toggleMobileFilters(true);$('closeFilters').onclick=()=>toggleMobileFilters(false);filterBackdrop.onclick=()=>toggleMobileFilters(false);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});let touchStartX=null;filterDrawer.addEventListener('touchstart',e=>{touchStartX=e.touches[0].clientX},{passive:true});filterDrawer.addEventListener('touchend',e=>{if(touchStartX!==null&&touchStartX-e.changedTouches[0].clientX>65)toggleMobileFilters(false);touchStartX=null},{passive:true});window.matchMedia('(min-width:681px)').addEventListener('change',e=>{if(e.matches&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});
 if(localStorage.getItem('edenTheme')==='light')document.documentElement.classList.add('light');
@@ -383,5 +394,5 @@ function updateChatMode(){const custom=$('chatMode').value==='text';$('chatForm'
 function updateChatPreview(){$('chatPreview').textContent=$('chatPhrase').value+'\n🎮 '+$('chatGame').value}
 $('chatPhrase').onchange=updateChatPreview;$('chatGame').onchange=updateChatPreview;updateChatPreview();
 $('chatForm').onsubmit=async e=>{e.preventDefault();const nickname=$('chatNickname').value.trim(),phrase=$('chatPhrase').value,game=$('chatGame').value;const custom=$('chatMode').value==='text',message=$('chatCustomMessage').value.trim();if(!nickname||(custom?!message:!phrase||!game))return;localStorage.setItem('edenChatNickname',nickname);$('chatSend').disabled=true;try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(custom?{nickname,message,room:selectedChatRoom}:{nickname,phrase,game,room:selectedChatRoom})});const data=await res.json();if(!res.ok)throw Error(data.error||'No se pudo enviar');$('chatCustomMessage').value='';selectedChatRoom=null;$('chatSelectedRoom').hidden=true;chatLastId=-1;await refreshChat()}catch(err){$('chatNotice').textContent=err.message}finally{$('chatSend').disabled=false}};
-load();setInterval(load,10000);setInterval(refreshChat,8000);
+load().then(focusLastSentRoom);setInterval(load,10000);setInterval(refreshChat,8000);
 </script></body></html>
