@@ -311,7 +311,8 @@ $('sendLanPreview').onclick = () => {
   const room = {host: ip, port: String(Number(port)), nick};
   const bridge = new URL('http://' + octets.join('.') + ':24879/v1/prepare');
   bridge.search = new URLSearchParams(room);
-  const popup = window.open(bridge.href, '_blank', 'popup');
+  const target = 'eden-bridge-' + crypto.randomUUID();
+  const popup = window.open('', target, 'popup');
   if (!popup) {
     try { sessionStorage.setItem('edenReturnRoom', ip + ':' + port); } catch (e) {}
     $('connectDialog').close();
@@ -328,6 +329,13 @@ $('sendLanPreview').onclick = () => {
   }
   const timeout = setTimeout(() => window.removeEventListener('message', authorize), 15000);
   window.addEventListener('message', authorize);
+  // Send only the sender's origin for this navigation, including HTTPS to LAN HTTP.
+  const link = document.createElement('a');
+  link.href = bridge.href;
+  link.target = target;
+  link.rel = 'opener';
+  link.referrerPolicy = 'origin';
+  link.click();
   $('connectDialog').close();
 };
 const filterDrawer=$('filterDrawer'),filterBackdrop=$('filterBackdrop');function toggleMobileFilters(open){filterDrawer.classList.toggle('is-open',open);filterBackdrop.hidden=!open;$('openFilters').setAttribute('aria-expanded',String(open));document.body.classList.toggle('filters-open',open);if(open)$('closeFilters').focus();else $('openFilters').focus()}$('openFilters').onclick=()=>toggleMobileFilters(true);$('closeFilters').onclick=()=>toggleMobileFilters(false);filterBackdrop.onclick=()=>toggleMobileFilters(false);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});let touchStartX=null;filterDrawer.addEventListener('touchstart',e=>{touchStartX=e.touches[0].clientX},{passive:true});filterDrawer.addEventListener('touchend',e=>{if(touchStartX!==null&&touchStartX-e.changedTouches[0].clientX>65)toggleMobileFilters(false);touchStartX=null},{passive:true});window.matchMedia('(min-width:681px)').addEventListener('change',e=>{if(e.matches&&filterDrawer.classList.contains('is-open'))toggleMobileFilters(false)});
