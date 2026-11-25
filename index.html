@@ -131,7 +131,10 @@ body{background:radial-gradient(ellipse 900px 400px at 50% -200px,#275b9344,tran
 #chatPanel:not(.chat-entered) #chatChangeNickname{display:none!important;visibility:hidden!important;pointer-events:none!important}
 #chatPanel:not(.chat-entered) #chatEntry{display:flex!important}
 #chatPanel.chat-entered #chatEntry{display:none!important}
-.versions-query{display:none}
+.room-accordion .versions-query,
+.room-accordion .version-request-status {
+  display: none;
+}
 .ui-symbols{position:absolute;width:0;height:0;overflow:hidden}
 .ui-icon{width:1em;height:1em;vertical-align:-.13em;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .star.selected .ui-icon{fill:currentColor}

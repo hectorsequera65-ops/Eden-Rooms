@@ -75,12 +75,14 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await page.clock.fastForward(10001);
       await expect(page.locator('.room-open .room-summary')).toContainText('5/32');
       assert.equal(requests.length,0);
-      await expect(page.locator('.room-open [data-query-versions]')).toBeHidden();
+      await expect(page.locator('.room-open [data-query-versions]')).toHaveCSS('display','none');
       await page.locator('.room-open [data-query-versions]').dispatchEvent('click');
       await expect(page.locator('.room-open .player-version')).toHaveCount(3);
       await page.locator('.room-open [data-expand]').click();
       await expect(page.locator('.room-open .player-version')).toHaveCount(4);
       const eden=page.locator('.room-open .player-row').filter({hasText:'Eden'});
+      await expect(eden.locator('.player-name')).toBeVisible();
+      await expect(eden.locator('.player-version')).toBeVisible();
       await expect(eden).toContainText('Versión 4.0.1');
       const withoutVersion = page.locator('.room-open .player-row').filter({hasText:'SinVersion'});
       await expect(withoutVersion.locator('.player-game')).toHaveText(mario);
@@ -186,6 +188,9 @@ for(const [device,width,height] of [['desktop',1280,900],['mobile',390,844]]){
       await expect(page.locator('.room-open .player-version')).toHaveCount(4);
       await expect(eden).toContainText('Versión 4.0.1');
       await expect(page.locator('.version-request-status time')).toHaveText('Versiones consultadas a las 13:14');
+      await expect(page.locator('.room-open .version-request-status')).toHaveCSS('display','none');
+      await expect(page.locator('.room-open .version-association-detail')).toContainText('asociadas a jugadores actuales');
+      await expect(page.locator('.room-open .version-association-detail')).toBeHidden();
       rooms[0].players=[{nickname:'Nuevo',gameName:smash}];
       await page.clock.fastForward(8*3600000);
       await expect(eden).toHaveCount(0);
