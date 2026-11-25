@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 import {onRequestGet, onRequestPost} from '../functions/api/versiones-programadas.js';
 import {onRequestGet as rooms} from '../functions/api/rooms.js';
-import {onRequestGet as chat} from '../functions/api/chat.js';
+import {onRequestGet as chat, onRequestPost as postChat} from '../functions/api/chat.js';
 import {onRequest as published} from '../functions/api/versiones-publicadas.js';
 import {PREVIEW_HOST, PRODUCTION_HOST} from '../lib/enet-preview.js';
 
@@ -234,4 +234,28 @@ test('chat initialization preserves messages in databases without a historical r
   const response = await chat({env:{DB:binding}});
   assert.equal(response.status, 200);
   assert.equal((await response.json()).messages[0].message, 'Existing message');
+});
+
+test('plain chat writes stay in the D1 binding for the requesting host', async t => {
+  const production = database(t);
+  const preview = database(t);
+  const fetch = t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('Chat without a room attachment must not look up a lobby');
+  });
+
+  for (const [host, db] of [[PRODUCTION_HOST, production], [PREVIEW_HOST, preview]]) {
+    const message = 'Mensaje de prueba para ' + host;
+    const env = {DB:db.binding};
+    const request = new Request('https://' + host + '/api/chat', {
+      method:'POST',
+      body:JSON.stringify({nickname:'Fixture', message}),
+    });
+    assert.equal((await postChat({request, env})).status, 201);
+    const response = await chat({env});
+    assert.equal(response.status, 200);
+    const {messages} = await response.json();
+    assert.deepEqual(messages.map(({message, room_ip, room_port}) => [message, room_ip, room_port]),
+      [[message, null, null]]);
+  }
+  assert.equal(fetch.mock.callCount(), 0);
 });
